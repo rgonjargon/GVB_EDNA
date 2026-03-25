@@ -1,0 +1,24 @@
+# R / RStudio artifacts
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj.user/
+
+# Data and generated artifacts
+analysis/data/
+analysis/output/models/
+outputs/plots/
+
+# Quarto render artifacts
+scripts/*_files/
+scripts/*.html
+!scripts/1_analysis.html
+
+# Local env and secrets (do not commit)
+.env
+.env.local
+
+# OS
+.DS_Store
+._*
+Thumbs.db

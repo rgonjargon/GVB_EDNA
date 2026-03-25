@@ -1,0 +1,316 @@
+---
+title: "Justine - GVB"
+author:  "Dr Tom Moore - Statistical Scientist"
+date:  '`r Sys.Date()`'
+knit: (function(inputFile, encoding) { out_dir <- "Reports";
+      rmarkdown::render(inputFile, encoding=encoding, output_file=file.path(dirname(inputFile),
+      out_dir, 'Analysis_Report.html'))})
+output:
+  html_document:
+    df_print: paged
+    code_folding: show
+    toc: true
+    toc_float: true
+    toc_depth: 5
+    theme: united
+    highlight: tango
+    fig_width: 9
+    fig_height: 6
+---
+<details><summary>Setup</summary>
+```{r, setup, message=FALSE, warning = FALSE}
+# R environment
+
+# Install packages and functions
+ipak <- function(pkg) {
+  new.pkg <- pkg[!(pkg %in% installed.packages()[,"Package"])]
+  if (length(new.pkg)) {
+    install.packages(new.pkg, dependencies = TRUE)
+    cat("Not Installed:", paste(new.pkg, collapse = ", "), "\n")
+  } else {
+    cat("All Packages Installed :) \n")
+  }
+  invisible(sapply(pkg, require, character.only = TRUE))
+}
+
+packages <- c("tidyverse","readr","car","lme4","effects","writexl","httr", "blavaan",
+              "performance","glue","readxl","modelr","DHARMa","brms","simDAG", "CausalImpact",
+              "lubridate","dagitty","ggdag","stringr","kableExtra","tidymodels",
+              "bayesplot","emmeans","tidybayes","bayestestR","future",
+              "GGally","here","janitor","RColorBrewer")
+
+bayesplot::color_scheme_set("blue")                                    # Set color scheme
+options(mc.cores = parallel::detectCores())                            # Parallel Chains
+cmdstanr::set_cmdstan_path(path = "C:/Program Files/R/cmdstan-2.35.0") # R-Stan
+ipak(packages)                                                         # Install packages
+```
+</details>
+
+<details><summary>Wrangling & Summary</summary>
+```{r}
+#read in data ----
+df.6 <- read_excel(here("Analysis/Data/Exp6-time2.xlsx"), sheet = 1) # Import .xlsx file
+df.6 <- df.6 %>% 
+  clean_names() %>% # tidy variable names 
+  select(-exp) # remove unneeded variable
+
+cols <- c('sample','rep','sample_id')
+df.6[,cols] <- lapply(df.6[,cols],as.factor) # Coerce variables to factors 
+
+df.6 <- df.6 %>%
+  mutate(time = ordered(time)) %>% # ordered factor
+  mutate(positive_cut = ifelse(cq > 39, 0, positive)) # Create binary variable with different cut off
+
+df.6 %>% group_by(sample,time) %>% tally()
+str(df.6)
+```
+
+```{r}
+df.6.2h <- read_excel(here("Analysis/Data/Exp6-Number-2h.xlsx"), sheet = 1) %>% # Import .xlsx file
+  mutate(time = "2")
+df.6.24h <- read_excel(here("Analysis/Data/Exp6-Number-24h.xlsx"), sheet = 1) %>% # Import .xlsx file
+  mutate(time = "24")
+
+df.6.d <- rbind(df.6.2h,df.6.24h) %>% clean_names()
+
+cols <- c('sample','rep','sample_id')
+df.6.d[,cols] <- lapply(df.6.d[,cols],as.factor) # Coerce variables to factors 
+
+df.6.d <- df.6.d %>%
+  mutate(time = ordered(time)) %>% # ordered factor
+  mutate(number = ordered(number)) %>%
+  mutate(positive = ifelse(is.na(positive), 0, positive)) %>%
+  mutate(positive_cut = ifelse(cq > 39, 0, positive)) # Create binary variable with different cut off
+
+df.6.d %>% group_by(sample,number) %>% tally()
+str(df.6.d)
+```
+
+```{r}
+df.10 <- read_excel(here("Analysis/Data/Exp10- no cut off.xlsx"), sheet = 1) %>% clean_names()
+
+cols <- c('sample','rep','sample_id')
+df.10[,cols] <- lapply(df.10[,cols],as.factor) # Coerce variables to factors 
+
+df.10 <- df.10 %>%
+  mutate(positive_cut = ifelse(cq > 39, 0, positive)) %>% # Create binary variable with different cut off
+    mutate(time = case_when(
+      time == "16hrs" ~ 16,
+      time == "1d" ~ 24,
+      time == "2d" ~ 48,
+      time == "3d" ~ 72,
+      time == "7d" ~ 168,
+      time == "0" ~ 0
+    )
+  ) %>%
+    mutate(time = ordered(time)) # ordered factor
+  
+str(df.10)
+```
+
+</details>
+
+# Methods:
+
+To compare the probability of detection (%) of GVB at different exposure levels (0, 2, 6, 16, 24, 48 hrs), with and without a Cq cut off (i.e., if a Cq value was greater than 39 then classify as no detection), and GVB density (where data was available: at 2hr and 24hrs), generalized linear mixed effect (GLMM) models were performed in R (R Core Team 2022) using the brms package (Bürkner, 2017). 
+
+For all models a Bernoulli distribution was selected with a logit link function to model the binary detection response (yes = 1, no = 0). The fixed effects of time and number of GBV were treated as monotonic predictors since they are ordered categories. An interaction term was included between time and number of GVB when this information was available. A random effect of sample was used for all models since measures were collected in triplicates. A weakly informative prior was used for the fixed effects to aid convergence (normal distribution with a mean of 0 and standard deviation of 1.5). 
+
+Model validation was performed using prior and posterior predictive checks, as well as effective samples sizes and r-hats (McElreath, 2020).
+
+## Experiment 6
+### Analyses
+<details><summary>Models</summary>
+```{r}
+mod_formula <- bf(positive ~ mo(time) + (1|sample_id))
+
+priors <- prior(normal(0,1.5), class = b)
+
+mod.1 <- brm(mod_formula,  family = bernoulli(link = "logit"),
+             prior = priors,
+             data = df.6, file = paste0(here("Analysis/Output/Models/mod.1.Rmd")),
+             threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+             control = list(step_size = 0.01, adapt_delta = 0.99),
+             backend = "cmdstanr", silent = 0, refresh = 1000,
+             chains = 4, cores = 4, warmup = 2000, iter = 4000)
+
+mod_formula <- bf(positive_cut ~ mo(time) + (1|sample_id))
+
+mod.2 <- brm(mod_formula,  family = bernoulli(link = "logit"),
+             prior = priors,
+             data = df.6, file = paste0(here("Analysis/Output/Models/mod.2.Rmd")),
+             threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+             control = list(step_size = 0.01, adapt_delta = 0.99),
+             backend = "cmdstanr", silent = 0, refresh = 1000,
+             chains = 4, cores = 4, warmup = 2000, iter = 4000)
+
+mod_formula <- bf(positive ~ mo(time) * mo(number) + (1|sample_id))
+
+mod.3 <- brm(mod_formula,  family = bernoulli(link = "logit"),
+             prior = priors,
+             data = df.6.d, file = paste0(here("Analysis/Output/Models/mod.3.Rmd")),
+             threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+             control = list(step_size = 0.01, adapt_delta = 0.99),
+             backend = "cmdstanr", silent = 0, refresh = 1000,
+             chains = 4, cores = 4, warmup = 2000, iter = 4000)
+
+mod_formula <- bf(positive_cut ~ mo(time) * mo(number) + (1|sample_id))
+
+mod.4 <- brm(mod_formula,  family = bernoulli(link = "logit"),
+             prior = priors,
+             data = df.6.d, file = paste0(here("Analysis/Output/Models/mod.4.Rmd")),
+             threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+             control = list(step_size = 0.01, adapt_delta = 0.99),
+             backend = "cmdstanr", silent = 0, refresh = 1000,
+             chains = 4, cores = 4, warmup = 2000, iter = 4000)
+```
+</details><details><summary>Validation</summary>
+```{r, echo=FALSE, message=FALSE, fig.show='hold',out.width='50%'}
+pp_check(mod.1, ndraws = 200)
+pp_check(mod.2, ndraws = 200)
+pp_check(mod.3, ndraws = 200)
+pp_check(mod.4, ndraws = 200)
+```
+</details><details><summary>Output</summary>
+```{r,echo=FALSE}
+summary(mod.1)
+summary(mod.2)
+summary(mod.3)
+summary(mod.4)
+```
+</details> 
+
+### Effect Plots
+```{r,warning=FALSE,echo=FALSE,fig.width=7,fig.height=4, out.width='100%', dpi = 600}
+# Custom conditional effect plots
+c_eff_1 <- conditional_effects(mod.1)[[1]] %>% mutate(cutoff = "No")
+c_eff_2 <- conditional_effects(mod.2)[[1]] %>% mutate(cutoff = "Yes") %>% rename(positive = positive_cut)
+c_eff <- rbind(c_eff_1, c_eff_2)
+
+c_eff %>% ggplot(aes(x = time, y = estimate__, ymin = lower__, ymax = upper__, color = cutoff)) +
+  geom_errorbar(position = position_dodge(width = -0.5), width = 0.3, size = 1) +
+    geom_point(position = position_dodge(width = -0.5), size = 3, alpha = 0.5) +
+    theme_bw() +
+  scale_y_continuous(labels = percent) +
+  scale_color_manual(values = c("darkblue", "darkgreen")) +
+  labs(x = "GVB exposure (hrs)", y = "Probability of detection (%)") +
+  guides(color=guide_legend(title="Cq cut off (> 39)", reverse = TRUE))
+```
+
+Figure 1: Conditional effect plot of GBV exposure on the probability of detection with (yes = green) and without (no = blue) a Cq cut off of 39. Error bars represent 95% credible intervals with points representing the mean estimate.
+
+
+```{r,warning=FALSE,echo=FALSE,fig.width=7,fig.height=5, out.width='100%',dpi = 600}
+c_eff_3 <- conditional_effects(mod.3, effect = "time:number")[[1]] %>% mutate(cutoff = "No")
+c_eff_4 <- conditional_effects(mod.4, effect = "time:number")[[1]] %>% mutate(cutoff = "Yes") %>%  rename(positive = positive_cut)
+
+c_eff <- rbind(c_eff_3, c_eff_4) %>%
+  mutate(time = paste0("Time: ", time, " hrs")) %>%
+  mutate(number = paste0(number, " GVB"))
+
+c_eff$cutoff <- factor(c_eff$cutoff, levels = c("Yes", "No"))
+
+c_eff %>% ggplot(aes(x = cutoff, y = estimate__, ymin = lower__, ymax = upper__, color = cutoff)) +
+  geom_errorbar(position = position_dodge(width = 0.5), width = 0.3, size = 1) +
+    geom_point(position = position_dodge(width = 0.5), size = 3, alpha = 0.5) +
+    theme_bw() +
+  scale_y_continuous(labels = percent) +
+    scale_color_manual(values = c("darkgreen", "darkblue")) +
+  labs(x = "Cq cut off (> 39)", y = "Probability of detection (%)") +
+  guides(color=guide_legend(title="Cq cut off (> 39)")) +
+  facet_grid(number ~ time)
+```
+
+Figure 2: Conditional effect plot of GBV exposure on probability of detection faceted by time and number of GVB with (yes = green) and without (no = blue) a Cq cut off of 39. Error bars represent 95% credible intervals with points representing the mean estimate.
+
+### Tables
+<details><summary>Expand</summary>
+```{r, echo = FALSE}
+kable(c_eff_1, caption = "Table 1: Time - Values for Experiment 6 with no cut off")
+kable(c_eff_2, caption = "Table 2: Time - Values for Experiment 6 with cut off")
+kable(c_eff_3, caption = "Table 3: Number - Values for Experiment 6 at 2 hrs")
+kable(c_eff_4, caption = "Table 4: Number - Values for Experiment 6 at 24 hrs")
+```
+</details>
+
+## Experiment 10
+### Analyses
+<details><summary>Models</summary>
+```{r}
+mod_formula <- bf(positive ~ mo(time) + (1|sample_id))
+
+priors <- prior(normal(0,1.5), class = b)
+
+mod.5 <- brm(mod_formula,  family = bernoulli(link = "logit"),
+             prior = priors,
+             data = df.10, file = paste0(here("Analysis/Output/Models/mod.5.Rmd")),
+             threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+             control = list(step_size = 0.01, adapt_delta = 0.99),
+             backend = "cmdstanr", silent = 0, refresh = 1000,
+             chains = 4, cores = 4, warmup = 2000, iter = 4000)
+
+mod_formula <- bf(positive_cut ~ mo(time) + (1|sample_id))
+
+mod.6 <- brm(mod_formula,  family = bernoulli(link = "logit"),
+             prior = priors,
+             data = df.10, file = paste0(here("Analysis/Output/Models/mod.6.Rmd")),
+             threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+             control = list(step_size = 0.01, adapt_delta = 0.99),
+             backend = "cmdstanr", silent = 0, refresh = 1000,
+             chains = 4, cores = 4, warmup = 2000, iter = 4000)
+```
+</details><details><summary>Validation</summary>
+```{r, echo=FALSE, message=FALSE, fig.show='hold',out.width='50%'}
+pp_check(mod.5, ndraws = 200)
+pp_check(mod.6, ndraws = 200)
+```
+</details><details><summary>Output</summary>
+```{r,echo=FALSE}
+summary(mod.5)
+summary(mod.6)
+```
+
+### Effect Plot
+```{r,warning=FALSE,echo=FALSE,fig.width=7,fig.height=4, out.width='100%', dpi = 600}
+# Custom conditional effect plots
+c_eff_5 <- conditional_effects(mod.5)[[1]] %>% mutate(cutoff = "No")
+c_eff_6 <- conditional_effects(mod.6)[[1]] %>% mutate(cutoff = "Yes") %>% rename(positive = positive_cut)
+c_eff <- rbind(c_eff_5, c_eff_6)
+
+c_eff %>% ggplot(aes(x = time, y = estimate__, ymin = lower__, ymax = upper__, color = cutoff)) +
+  geom_errorbar(position = position_dodge(width = -0.5), width = 0.3, size = 1) +
+    geom_point(position = position_dodge(width = -0.5), size = 3, alpha = 0.5) +
+    theme_bw() +
+  scale_y_continuous(labels = percent) +
+  scale_color_manual(values = c("darkblue", "darkgreen")) +
+  labs(x = "GVB exposure (hrs)", y = "Probability of detection (%)") +
+  guides(color=guide_legend(title="Cq cut off (> 39)", reverse = TRUE))
+```
+
+Figure 3: Conditional effect plot of GBV exposure on the probability of detection with (yes = green) and without (no = blue) a Cq cut off of 39. Error bars represent 95% credible intervals with points representing the mean estimate.
+
+### Tables
+<details><summary>Expand</summary>
+```{r, echo = FALSE}
+kable(c_eff_5, caption = "Table 5: Time - Values for Experiment 10 with no cut off")
+kable(c_eff_6, caption = "Table 6: Time - Values for Experiment 10 with cut off")
+```
+</details>
+
+## Results
+
+In Bayesian analysis, explanatory variables are considered “important” (significant) if their 95% credible interval (95% CI) is exclusive of zero.
+
+# References
+
+Bürkner, P.C., (2017). brms: An R Package for Bayesian Multilevel Models Using Stan. Journal of Statistical Software, 80(1), 1-28. <https://econpapers.repec.org/article/jssjstsof/v_3a080_3ai01.htm>
+
+McElreath, R. (2020). Statistical rethinking: A Bayesian course with examples in R and Stan. Chapman and Hall/CRC.
+
+R Core Team (2022). R: A language and environment for statistical computing. R Foundation for Statistical Computing, Vienna, Austria. <https://www.R-project.org/>
+
+<details><summary>Session Information</summary>
+```{r}
+utils::sessionInfo()
+```
+</details>
