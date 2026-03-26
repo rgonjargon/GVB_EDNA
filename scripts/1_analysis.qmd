@@ -1,9 +1,20 @@
 ---
-title: "Justine - GVB (2026)"
+title: "GBV Detection Analysis"
+subtitle: "*Document structure and formatting were assisted with Cursor.*"
 author: "Dr Tom Moore - Statistical Scientist"
 date: "`r Sys.Date()`"
 format:
   html:
+    include-in-header:
+      text: |
+        <style>
+        .quarto-title .subtitle,
+        p.subtitle,
+        .subtitle.lead {
+          font-size: 0.88rem;
+          font-weight: normal;
+        }
+        </style>
     df-print: paged
     code-fold: false
     toc: true
@@ -21,15 +32,6 @@ execute:
   message: false
 ---
 
-```{r setup}
-# Global rendering paths
-dir.create("outputs/plots", recursive = TRUE, showWarnings = FALSE)
-dir.create("outputs/models", recursive = TRUE, showWarnings = FALSE)
-
-# Send all knitr-generated figures to outputs/plots/
-knitr::opts_chunk$set(fig.path = "outputs/plots")
-```
-
 ```{r setup-packages, message=FALSE, warning=FALSE}
 # Install packages and functions (based on existing Rmd setups)
 ipak <- function(pkg) {
@@ -41,13 +43,7 @@ ipak <- function(pkg) {
 }
 
 packages <- c(
-  "tidyverse", "readr", "car", "lme4", "effects", "writexl", "httr", "blavaan",
-  "performance", "glue", "readxl", "modelr", "DHARMa", "brms", "simDAG", "CausalImpact",
-  "lubridate", "dagitty", "ggdag", "stringr", "kableExtra", "tidymodels",
-  "bayesplot", "emmeans", "tidybayes", "bayestestR", "future",
-  "GGally", "here", "janitor", "RColorBrewer", "reshape2", "arrow", "pins", "usethis",
-  "ggtext", "forcats", "cowplot", "ggdendro", "gplots", "cmdstanr", "Rgraphviz",
-  "nadiv", "graph4lg", "marginaleffects", "rethinking"
+  "tidyverse", "readxl", "janitor", "here", "reshape2", "brms", "cmdstanr", "bayesplot", "scales", "knitr"
 )
 
 ipak(packages)
@@ -55,79 +51,12 @@ ipak(packages)
 bayesplot::color_scheme_set("blue")
 options(mc.cores = parallel::detectCores())
 
-# Set cmdstan path if cmdstanr is available (best-effort; may differ per machine)
-cmdstan_candidates <- c(
-  "/powerplant/workspace/hrltxm/workbench-k8s/stan/vanilla_stan/cmdstan-2.36.0",
-  "C:/Program Files/R/cmdstan-2.35.0"
-)
-invisible(lapply(cmdstan_candidates, function(p) {
-  try(cmdstanr::set_cmdstan_path(path = p), silent = TRUE)
-}))
+# Ensure plot output directory exists
+dir.create(here::here("outputs/plots"), recursive = TRUE, showWarnings = FALSE)
+
+# Production Sever Settings
+cmdstanr::set_cmdstan_path("/powerplant/workspace/hrltxm/workbench-k8s/stan/vanilla_stan/cmdstan-2.36.0")
 ```
-
-## Part A: GVB detection (Experiments 6 & 10)
-
-<details><summary>Wrangling & Summary</summary>
-```{r}
-#read in data ----
-df.6 <- read_excel(here::here("analysis/data/Exp6-time2.xlsx"), sheet = 1) # Import .xlsx file
-df.6 <- df.6 %>% 
-  clean_names() %>% # tidy variable names 
-  select(-exp) # remove unneeded variable
-
-cols <- c("sample", "rep", "sample_id")
-df.6[, cols] <- lapply(df.6[, cols], as.factor) # Coerce variables to factors
-
-df.6 <- df.6 %>%
-  mutate(time = ordered(time)) %>% # ordered factor
-  mutate(positive_cut = ifelse(cq > 39, 0, positive)) # Create binary variable with different cut off
-
-df.6 %>% group_by(sample, time) %>% tally()
-str(df.6)
-```
-
-```{r}
-df.6.2h <- read_excel(here::here("analysis/data/Exp6-Number-2h.xlsx"), sheet = 1) %>% # Import .xlsx file
-  mutate(time = "2")
-df.6.24h <- read_excel(here::here("analysis/data/Exp6-Number-24h.xlsx"), sheet = 1) %>% # Import .xlsx file
-  mutate(time = "24")
-
-df.6.d <- rbind(df.6.2h, df.6.24h) %>% clean_names()
-
-cols <- c("sample", "rep", "sample_id")
-df.6.d[, cols] <- lapply(df.6.d[, cols], as.factor) # Coerce variables to factors
-
-df.6.d <- df.6.d %>%
-  mutate(time = ordered(time)) %>% # ordered factor
-  mutate(number = ordered(number)) %>%
-  mutate(positive = ifelse(is.na(positive), 0, positive)) %>%
-  mutate(positive_cut = ifelse(cq > 39, 0, positive)) # Create binary variable with different cut off
-
-df.6.d %>% group_by(sample, number) %>% tally()
-str(df.6.d)
-```
-
-```{r}
-df.10 <- read_excel(here::here("analysis/data/Exp10- no cut off.xlsx"), sheet = 1) %>% clean_names()
-
-cols <- c("sample", "rep", "sample_id")
-df.10[, cols] <- lapply(df.10[, cols], as.factor) # Coerce variables to factors
-
-df.10 <- df.10 %>%
-  mutate(positive_cut = ifelse(cq > 39, 0, positive)) %>% # Create binary variable with different cut off
-  mutate(time = case_when(
-    time == "16hrs" ~ 16,
-    time == "1d" ~ 24,
-    time == "2d" ~ 48,
-    time == "3d" ~ 72,
-    time == "7d" ~ 168,
-    time == "0" ~ 0
-  )) %>%
-  mutate(time = ordered(time)) # ordered factor
-
-str(df.10)
-```
-</details>
 
 # Methods:
 
@@ -139,10 +68,49 @@ Model validation was performed using prior and posterior predictive checks, as w
 
 ## Experiment 6
 
-### Analyses
+```{r exp6-wrangle, include=FALSE}
+# read in data ----
+df.6 <- read_excel(here::here("analysis/data/Exp6-time2.xlsx"), sheet = 1)
+df.6 <- df.6 %>%
+  clean_names() %>%
+  select(-exp)
 
-<details><summary>Models</summary>
-```{r}
+cols <- c("sample", "rep", "sample_id")
+df.6[, cols] <- lapply(df.6[, cols], as.factor)
+
+df.6 <- df.6 %>%
+  mutate(time = ordered(time)) %>%
+  mutate(positive_cut = ifelse(cq > 39, 0, positive))
+
+df.6.2h <- read_excel(here::here("analysis/data/Exp6-Number-2h.xlsx"), sheet = 1) %>%
+  mutate(time = "2")
+df.6.24h <- read_excel(here::here("analysis/data/Exp6-Number-24h.xlsx"), sheet = 1) %>%
+  mutate(time = "24")
+
+df.6.d <- rbind(df.6.2h, df.6.24h) %>% clean_names()
+
+cols <- c("sample", "rep", "sample_id")
+df.6.d[, cols] <- lapply(df.6.d[, cols], as.factor)
+
+df.6.d <- df.6.d %>%
+  mutate(time = ordered(time)) %>%
+  mutate(number = ordered(number)) %>%
+  mutate(positive = ifelse(is.na(positive), 0, positive)) %>%
+  mutate(positive_cut = ifelse(cq > 39, 0, positive))
+```
+
+<details><summary>Data frames</summary>
+
+```{r exp6-summary-tibbles, echo=FALSE}
+print(df.6 %>% group_by(sample, time) %>% tally())
+print(df.6.d %>% group_by(sample, number) %>% tally())
+```
+
+</details>
+
+::: {.panel-tabset}
+
+```{r exp6-models-fit, include=FALSE}
 mod_formula <- bf(positive ~ mo(time) + (1|sample_id))
 
 priors <- prior(normal(0,1.5), class = b)
@@ -197,47 +165,38 @@ mod.4 <- brm(
   chains = 4, cores = 4, warmup = 2000, iter = 4000
 )
 ```
-</details>
 
-<details><summary>Validation</summary>
-```{r, echo=FALSE, message=FALSE, fig.show='hold', out.width='50%'}
-pp_check(mod.1, ndraws = 200)
-pp_check(mod.2, ndraws = 200)
-pp_check(mod.3, ndraws = 200)
-pp_check(mod.4, ndraws = 200)
-```
-</details>
+## Effect plots
 
-<details><summary>Output</summary>
-```{r, echo=FALSE}
-summary(mod.1)
-summary(mod.2)
-summary(mod.3)
-summary(mod.4)
-```
-</details>
-
-### Effect Plots
-
-```{r, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4, out.width='100%', dpi = 600}
+```{r exp6-eff1, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4, out.width='100%', dpi = 600}
 # Custom conditional effect plots
 c_eff_1 <- conditional_effects(mod.1)[[1]] %>% mutate(cutoff = "No")
 c_eff_2 <- conditional_effects(mod.2)[[1]] %>% mutate(cutoff = "Yes") %>% rename(positive = positive_cut)
 c_eff <- rbind(c_eff_1, c_eff_2)
 
-c_eff %>% ggplot(aes(x = time, y = estimate__, ymin = lower__, ymax = upper__, color = cutoff)) +
+p_exp6_eff1 <- c_eff %>% ggplot(aes(x = time, y = estimate__, ymin = lower__, ymax = upper__, color = cutoff)) +
   geom_errorbar(position = position_dodge(width = -0.5), width = 0.3, size = 1) +
   geom_point(position = position_dodge(width = -0.5), size = 3, alpha = 0.5) +
   theme_bw() +
-  scale_y_continuous(labels = percent) +
+  scale_y_continuous(labels = scales::percent) +
   scale_color_manual(values = c("darkblue", "darkgreen")) +
   labs(x = "GVB exposure (hrs)", y = "Probability of detection (%)") +
   guides(color = guide_legend(title="Cq cut off (> 39)", reverse = TRUE))
+
+ggplot2::ggsave(
+  filename = here::here("outputs/plots", "exp6_effect_1.png"),
+  plot = p_exp6_eff1,
+  width = knitr::opts_current$get("fig.width"),
+  height = knitr::opts_current$get("fig.height"),
+  dpi = 600
+)
+
+p_exp6_eff1
 ```
 
 Figure 1: Conditional effect plot of GBV exposure on the probability of detection with (yes = green) and without (no = blue) a Cq cut off of 39. Error bars represent 95% credible intervals with points representing the mean estimate.
 
-```{r, warning=FALSE, echo=FALSE, fig.width=7, fig.height=5, out.width='100%', dpi = 600}
+```{r exp6-eff2, warning=FALSE, echo=FALSE, fig.width=7, fig.height=5, out.width='100%', dpi = 600}
 c_eff_3 <- conditional_effects(mod.3, effect = "time:number")[[1]] %>% mutate(cutoff = "No")
 c_eff_4 <- conditional_effects(mod.4, effect = "time:number")[[1]] %>% mutate(cutoff = "Yes") %>%  rename(positive = positive_cut)
 
@@ -247,36 +206,319 @@ c_eff <- rbind(c_eff_3, c_eff_4) %>%
 
 c_eff$cutoff <- factor(c_eff$cutoff, levels = c("Yes", "No"))
 
-c_eff %>% ggplot(aes(x = cutoff, y = estimate__, ymin = lower__, ymax = upper__, color = cutoff)) +
+p_exp6_eff2 <- c_eff %>% ggplot(aes(x = cutoff, y = estimate__, ymin = lower__, ymax = upper__, color = cutoff)) +
   geom_errorbar(position = position_dodge(width = 0.5), width = 0.3, size = 1) +
   geom_point(position = position_dodge(width = 0.5), size = 3, alpha = 0.5) +
   theme_bw() +
-  scale_y_continuous(labels = percent) +
+  scale_y_continuous(labels = scales::percent) +
   scale_color_manual(values = c("darkgreen", "darkblue")) +
   labs(x = "Cq cut off (> 39)", y = "Probability of detection (%)") +
   guides(color=guide_legend(title="Cq cut off (> 39)")) +
   facet_grid(number ~ time)
+
+ggplot2::ggsave(
+  filename = here::here("outputs/plots", "exp6_effect_2.png"),
+  plot = p_exp6_eff2,
+  width = knitr::opts_current$get("fig.width"),
+  height = knitr::opts_current$get("fig.height"),
+  dpi = 600
+)
+
+p_exp6_eff2
 ```
 
 Figure 2: Conditional effect plot of GBV exposure on probability of detection faceted by time and number of GVB with (yes = green) and without (no = blue) a Cq cut off of 39. Error bars represent 95% credible intervals with points representing the mean estimate.
 
-### Tables
+## Models
 
-<details><summary>Expand</summary>
-```{r, echo = FALSE}
-kable(c_eff_1, caption = "Table 1: Time - Values for Experiment 6 with no cut off")
-kable(c_eff_2, caption = "Table 2: Time - Values for Experiment 6 with cut off")
-kable(c_eff_3, caption = "Table 3: Number - Values for Experiment 6 at 2 hrs")
-kable(c_eff_4, caption = "Table 4: Number - Values for Experiment 6 at 24 hrs")
+```{r exp6-models-show, ref.label="exp6-models-fit", echo=TRUE, eval=FALSE}
+
 ```
-</details>
+
+## Validation
+
+```{r exp6-pp-check}
+#| echo: false
+#| message: false
+#| fig-show: hold
+#| layout-ncol: 2
+pp_check(mod.1, ndraws = 200, col = 2)
+pp_check(mod.2, ndraws = 200, col = 2)
+pp_check(mod.3, ndraws = 200, col = 2)
+pp_check(mod.4, ndraws = 200, col = 2)
+```
+
+## Output
+
+```{r exp6-summary, echo=FALSE}
+summary(mod.1)
+summary(mod.2)
+summary(mod.3)
+summary(mod.4)
+```
+
+## Tables
+
+```{r exp6-estimates, echo=FALSE}
+# Modeled estimates from conditional_effects() on the probability scale.
+# Convert to percent for reporting.
+
+ce6_time <- dplyr::bind_rows(
+  conditional_effects(mod.1)[[1]] %>%
+    mutate(cutoff = "No") %>%
+    transmute(
+      Cutoff = cutoff,
+      `Time (hrs)` = time,
+      `Estimate (%)` = round(estimate__ * 100, 2),
+      `Lower (%)` = round(lower__ * 100, 2),
+      `Upper (%)` = round(upper__ * 100, 2)
+    ),
+  conditional_effects(mod.2)[[1]] %>%
+    mutate(cutoff = "Yes") %>%
+    transmute(
+      Cutoff = cutoff,
+      `Time (hrs)` = time,
+      `Estimate (%)` = round(estimate__ * 100, 2),
+      `Lower (%)` = round(lower__ * 100, 2),
+      `Upper (%)` = round(upper__ * 100, 2)
+    )
+) %>%
+  arrange(Cutoff, `Time (hrs)`)
+
+ce6_time_number <- dplyr::bind_rows(
+  conditional_effects(mod.3, effect = "time:number")[[1]] %>%
+    mutate(cutoff = "No") %>%
+    transmute(
+      Cutoff = cutoff,
+      `Time (hrs)` = time,
+      `Number (GVB)` = number,
+      `Estimate (%)` = round(estimate__ * 100, 2),
+      `Lower (%)` = round(lower__ * 100, 2),
+      `Upper (%)` = round(upper__ * 100, 2)
+    ),
+  conditional_effects(mod.4, effect = "time:number")[[1]] %>%
+    mutate(cutoff = "Yes") %>%
+    transmute(
+      Cutoff = cutoff,
+      `Time (hrs)` = time,
+      `Number (GVB)` = number,
+      `Estimate (%)` = round(estimate__ * 100, 2),
+      `Lower (%)` = round(lower__ * 100, 2),
+      `Upper (%)` = round(upper__ * 100, 2)
+    )
+) %>%
+  arrange(Cutoff, `Time (hrs)`, `Number (GVB)`)
+
+knitr::kable(
+  ce6_time,
+  caption = "Modeled estimates from conditional effects (Experiment 6): time",
+  format = "html"
+)
+
+knitr::kable(
+  ce6_time_number,
+  caption = "Modeled estimates from conditional effects (Experiment 6): time x number",
+  format = "html"
+)
+```
+
+<!-- Pairwise comparisons removed -->
+
+```{r exp6-pairwise, include=FALSE, eval=FALSE}
+
+pairwise_time <- dplyr::bind_rows(
+  {
+    emm <- emmeans::emmeans(mod.1, ~ time, type = "response")
+    pr <- emmeans::contrast(emm, method = "pairwise", adjust = "tukey")
+    d <- as.data.frame(summary(pr))
+    d$Cutoff <- "No"
+    est_col <- if ("estimate" %in% names(d)) "estimate" else if ("diff" %in% names(d)) "diff" else if ("difference" %in% names(d)) "difference" else {
+      num_cols <- names(d)[sapply(d, is.numeric)]
+      num_cols <- setdiff(num_cols, c("SE", "SE.difference", "p.value"))
+      if (length(num_cols) < 1) stop("Pairwise table: could not infer numeric estimate/difference column.")
+      num_cols[1]
+    }
+    se_col <- if ("SE" %in% names(d)) "SE" else if ("SE.difference" %in% names(d)) "SE.difference" else {
+      se_like <- names(d)[grepl("^SE$|se\\b|SE\\.|Std\\.Error|std\\.error", names(d), ignore.case = TRUE)]
+      se_like <- intersect(se_like, names(d)[sapply(d, is.numeric)])
+      if (length(se_like) < 1) NA_character_ else se_like[1]
+    }
+    p_col <- if ("p.value" %in% names(d)) "p.value" else {
+      p_like <- names(d)[grepl("^p\\.value$|p\\.val|pvalue|p\\.adj|adj\\.p|p$", names(d), ignore.case = TRUE)]
+      p_like <- intersect(p_like, names(d)[sapply(d, is.numeric)])
+      if (length(p_like) < 1) NA_character_ else p_like[1]
+    }
+    d <- d %>%
+      mutate(
+        `Difference (pp)` = round(.data[[est_col]] * 100, 2),
+        `SE (pp)` = if (!is.na(se_col)) round(.data[[se_col]] * 100, 2) else NA_real_,
+        `p-value` = if (!is.na(p_col)) round(.data[[p_col]], 2) else NA_real_
+      ) %>%
+      transmute(Cutoff, Contrast = contrast, `Difference (pp)`, `SE (pp)`, `p-value`)
+    d
+  },
+  {
+    emm <- emmeans::emmeans(mod.2, ~ time, type = "response")
+    pr <- emmeans::contrast(emm, method = "pairwise", adjust = "tukey")
+    d <- as.data.frame(summary(pr))
+    d$Cutoff <- "Yes"
+    est_col <- if ("estimate" %in% names(d)) "estimate" else if ("diff" %in% names(d)) "diff" else if ("difference" %in% names(d)) "difference" else {
+      num_cols <- names(d)[sapply(d, is.numeric)]
+      num_cols <- setdiff(num_cols, c("SE", "SE.difference", "p.value"))
+      if (length(num_cols) < 1) stop("Pairwise table: could not infer numeric estimate/difference column.")
+      num_cols[1]
+    }
+    se_col <- if ("SE" %in% names(d)) "SE" else if ("SE.difference" %in% names(d)) "SE.difference" else {
+      se_like <- names(d)[grepl("^SE$|se\\b|SE\\.|Std\\.Error|std\\.error", names(d), ignore.case = TRUE)]
+      se_like <- intersect(se_like, names(d)[sapply(d, is.numeric)])
+      if (length(se_like) < 1) NA_character_ else se_like[1]
+    }
+    p_col <- if ("p.value" %in% names(d)) "p.value" else {
+      p_like <- names(d)[grepl("^p\\.value$|p\\.val|pvalue|p\\.adj|adj\\.p|p$", names(d), ignore.case = TRUE)]
+      p_like <- intersect(p_like, names(d)[sapply(d, is.numeric)])
+      if (length(p_like) < 1) NA_character_ else p_like[1]
+    }
+    d <- d %>%
+      mutate(
+        `Difference (pp)` = round(.data[[est_col]] * 100, 2),
+        `SE (pp)` = if (!is.na(se_col)) round(.data[[se_col]] * 100, 2) else NA_real_,
+        `p-value` = if (!is.na(p_col)) round(.data[[p_col]], 2) else NA_real_
+      ) %>%
+      transmute(Cutoff, Contrast = contrast, `Difference (pp)`, `SE (pp)`, `p-value`)
+    d
+  }
+)
+
+knitr::kable(
+  pairwise_time,
+  caption = "Pairwise comparisons between time levels (Experiment 6; Tukey-adjusted): response scale (pp)",
+  format = "html"
+)
+
+pairwise_number <- dplyr::bind_rows(
+  {
+    emm <- emmeans::emmeans(mod.3, ~ number | time, type = "response")
+    pr <- emmeans::contrast(emm, method = "pairwise", by = "time", adjust = "tukey")
+    d <- as.data.frame(summary(pr))
+    d$Cutoff <- "No"
+    est_col <- if ("estimate" %in% names(d)) "estimate" else if ("diff" %in% names(d)) "diff" else if ("difference" %in% names(d)) "difference" else {
+      num_cols <- names(d)[sapply(d, is.numeric)]
+      num_cols <- setdiff(num_cols, c("SE", "SE.difference", "p.value"))
+      if (length(num_cols) < 1) stop("Pairwise table: could not infer numeric estimate/difference column.")
+      num_cols[1]
+    }
+    se_col <- if ("SE" %in% names(d)) "SE" else if ("SE.difference" %in% names(d)) "SE.difference" else {
+      se_like <- names(d)[grepl("^SE$|se\\b|SE\\.|Std\\.Error|std\\.error", names(d), ignore.case = TRUE)]
+      se_like <- intersect(se_like, names(d)[sapply(d, is.numeric)])
+      if (length(se_like) < 1) NA_character_ else se_like[1]
+    }
+    p_col <- if ("p.value" %in% names(d)) "p.value" else {
+      p_like <- names(d)[grepl("^p\\.value$|p\\.val|pvalue|p\\.adj|adj\\.p|p$", names(d), ignore.case = TRUE)]
+      p_like <- intersect(p_like, names(d)[sapply(d, is.numeric)])
+      if (length(p_like) < 1) NA_character_ else p_like[1]
+    }
+    if ("time" %in% names(d)) {
+      d <- d %>%
+        mutate(
+          `Difference (pp)` = round(.data[[est_col]] * 100, 2),
+          `SE (pp)` = if (!is.na(se_col)) round(.data[[se_col]] * 100, 2) else NA_real_,
+          `p-value` = if (!is.na(p_col)) round(.data[[p_col]], 2) else NA_real_
+        ) %>%
+        transmute(Cutoff, `Time (hrs)` = time, Contrast = contrast, `Difference (pp)`, `SE (pp)`, `p-value`)
+    } else {
+      d <- d %>%
+        mutate(
+          `Difference (pp)` = round(.data[[est_col]] * 100, 2),
+          `SE (pp)` = if (!is.na(se_col)) round(.data[[se_col]] * 100, 2) else NA_real_,
+          `p-value` = if (!is.na(p_col)) round(.data[[p_col]], 2) else NA_real_
+        ) %>%
+        transmute(Cutoff, `Time (hrs)` = NA, Contrast = contrast, `Difference (pp)`, `SE (pp)`, `p-value`)
+    }
+    d
+  },
+  {
+    emm <- emmeans::emmeans(mod.4, ~ number | time, type = "response")
+    pr <- emmeans::contrast(emm, method = "pairwise", by = "time", adjust = "tukey")
+    d <- as.data.frame(summary(pr))
+    d$Cutoff <- "Yes"
+    est_col <- if ("estimate" %in% names(d)) "estimate" else if ("diff" %in% names(d)) "diff" else if ("difference" %in% names(d)) "difference" else {
+      num_cols <- names(d)[sapply(d, is.numeric)]
+      num_cols <- setdiff(num_cols, c("SE", "SE.difference", "p.value"))
+      if (length(num_cols) < 1) stop("Pairwise table: could not infer numeric estimate/difference column.")
+      num_cols[1]
+    }
+    se_col <- if ("SE" %in% names(d)) "SE" else if ("SE.difference" %in% names(d)) "SE.difference" else {
+      se_like <- names(d)[grepl("^SE$|se\\b|SE\\.|Std\\.Error|std\\.error", names(d), ignore.case = TRUE)]
+      se_like <- intersect(se_like, names(d)[sapply(d, is.numeric)])
+      if (length(se_like) < 1) NA_character_ else se_like[1]
+    }
+    p_col <- if ("p.value" %in% names(d)) "p.value" else {
+      p_like <- names(d)[grepl("^p\\.value$|p\\.val|pvalue|p\\.adj|adj\\.p|p$", names(d), ignore.case = TRUE)]
+      p_like <- intersect(p_like, names(d)[sapply(d, is.numeric)])
+      if (length(p_like) < 1) NA_character_ else p_like[1]
+    }
+    if ("time" %in% names(d)) {
+      d <- d %>%
+        mutate(
+          `Difference (pp)` = round(.data[[est_col]] * 100, 2),
+          `SE (pp)` = if (!is.na(se_col)) round(.data[[se_col]] * 100, 2) else NA_real_,
+          `p-value` = if (!is.na(p_col)) round(.data[[p_col]], 2) else NA_real_
+        ) %>%
+        transmute(Cutoff, `Time (hrs)` = time, Contrast = contrast, `Difference (pp)`, `SE (pp)`, `p-value`)
+    } else {
+      d <- d %>%
+        mutate(
+          `Difference (pp)` = round(.data[[est_col]] * 100, 2),
+          `SE (pp)` = if (!is.na(se_col)) round(.data[[se_col]] * 100, 2) else NA_real_,
+          `p-value` = if (!is.na(p_col)) round(.data[[p_col]], 2) else NA_real_
+        ) %>%
+        transmute(Cutoff, `Time (hrs)` = NA, Contrast = contrast, `Difference (pp)`, `SE (pp)`, `p-value`)
+    }
+    d
+  }
+)
+
+knitr::kable(
+  pairwise_number,
+  caption = "Pairwise comparisons between number levels within each time (Experiment 6; Tukey-adjusted): response scale (pp)",
+  format = "html"
+)
+```
+
+:::
 
 ## Experiment 10
 
-### Analyses
+```{r exp10-wrangle, include=FALSE}
+df.10 <- read_excel(here::here("analysis/data/Exp10- no cut off.xlsx"), sheet = 1) %>% clean_names()
 
-<details><summary>Models</summary>
-```{r}
+cols <- c("sample", "rep", "sample_id")
+df.10[, cols] <- lapply(df.10[, cols], as.factor)
+
+df.10 <- df.10 %>%
+  mutate(positive_cut = ifelse(cq > 39, 0, positive)) %>%
+  mutate(time = case_when(
+    time == "16hrs" ~ 16,
+    time == "1d" ~ 24,
+    time == "2d" ~ 48,
+    time == "3d" ~ 72,
+    time == "7d" ~ 168,
+    time == "0" ~ 0
+  )) %>%
+  mutate(time = ordered(time))
+```
+
+<details><summary>Data frames</summary>
+
+```{r exp10-summary-tibbles, echo=FALSE}
+print(df.10 %>% group_by(sample, time) %>% tally())
+```
+
+</details>
+
+::: {.panel-tabset}
+
+```{r exp10-models-fit, include=FALSE}
 mod_formula <- bf(positive ~ mo(time) + (1|sample_id))
 
 priors <- prior(normal(0,1.5), class = b)
@@ -305,70 +547,170 @@ mod.6 <- brm(
   chains = 4, cores = 4, warmup = 2000, iter = 4000
 )
 ```
-</details>
 
-<details><summary>Validation</summary>
-```{r, echo=FALSE, message=FALSE, fig.show='hold', out.width='50%'}
-pp_check(mod.5, ndraws = 200)
-pp_check(mod.6, ndraws = 200)
-```
-</details>
+## Effect plots
 
-<details><summary>Output</summary>
-```{r, echo=FALSE}
-summary(mod.5)
-summary(mod.6)
-```
-</details>
-
-### Effect Plot
-
-```{r, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4, out.width='100%', dpi = 600}
+```{r exp10-eff, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4, out.width='100%', dpi = 600}
 # Custom conditional effect plots
 c_eff_5 <- conditional_effects(mod.5)[[1]] %>% mutate(cutoff = "No")
 c_eff_6 <- conditional_effects(mod.6)[[1]] %>% mutate(cutoff = "Yes") %>% rename(positive = positive_cut)
 c_eff <- rbind(c_eff_5, c_eff_6)
 
-c_eff %>% ggplot(aes(x = time, y = estimate__, ymin = lower__, ymax = upper__, color = cutoff)) +
+p_exp10_eff <- c_eff %>% ggplot(aes(x = time, y = estimate__, ymin = lower__, ymax = upper__, color = cutoff)) +
   geom_errorbar(position = position_dodge(width = -0.5), width = 0.3, size = 1) +
   geom_point(position = position_dodge(width = -0.5), size = 3, alpha = 0.5) +
   theme_bw() +
-  scale_y_continuous(labels = percent) +
+  scale_y_continuous(labels = scales::percent) +
   scale_color_manual(values = c("darkblue", "darkgreen")) +
   labs(x = "GVB exposure (hrs)", y = "Probability of detection (%)") +
   guides(color=guide_legend(title="Cq cut off (> 39)", reverse = TRUE))
+
+ggplot2::ggsave(
+  filename = here::here("outputs/plots", "exp10_effect_1.png"),
+  plot = p_exp10_eff,
+  width = knitr::opts_current$get("fig.width"),
+  height = knitr::opts_current$get("fig.height"),
+  dpi = 600
+)
+
+p_exp10_eff
 ```
 
 Figure 3: Conditional effect plot of GBV exposure on the probability of detection with (yes = green) and without (no = blue) a Cq cut off of 39. Error bars represent 95% credible intervals with points representing the mean estimate.
 
-### Tables
+## Models
 
-<details><summary>Expand</summary>
-```{r, echo = FALSE}
-kable(c_eff_5, caption = "Table 5: Time - Values for Experiment 10 with no cut off")
-kable(c_eff_6, caption = "Table 6: Time - Values for Experiment 10 with cut off")
+```{r exp10-models-show, ref.label="exp10-models-fit", echo=TRUE, eval=FALSE}
+
 ```
-</details>
 
-## Results
+## Validation
 
-In Bayesian analysis, explanatory variables are considered "important" (significant) if their 95% credible interval (95% CI) is exclusive of zero.
-
-# References
-
-Bürkner, P.C., (2017). brms: An R Package for Bayesian Multilevel Models Using Stan. Journal of Statistical Software, 80(1), 1-28. <https://econpapers.repec.org/article/jssjstsof/v_3a080_3ai01.htm>
-
-McElreath, R. (2020). Statistical rethinking: A Bayesian course with examples in R and Stan. Chapman and Hall/CRC.
-
-R Core Team (2022). R: A language and environment for statistical computing. R Foundation for Statistical Computing, Vienna, Austria. <https://www.R-project.org/>
-
-<details><summary>Session Information</summary>
-```{r}
-utils::sessionInfo()
+```{r exp10-pp-check}
+#| echo: false
+#| message: false
+#| fig-show: hold
+#| layout-ncol: 2
+pp_check(mod.5, ndraws = 200, col = 2)
+pp_check(mod.6, ndraws = 200, col = 2)
 ```
-</details>
 
-## Part B: qPCR results (qPCR_results251017)
+## Output
+
+```{r exp10-summary, echo=FALSE}
+summary(mod.5)
+summary(mod.6)
+```
+
+## Tables
+
+```{r exp10-estimates, echo=FALSE}
+# Modeled estimates from conditional effects() on the probability scale.
+
+ce10_time <- dplyr::bind_rows(
+  conditional_effects(mod.5)[[1]] %>%
+    mutate(cutoff = "No") %>%
+    transmute(
+      Cutoff = cutoff,
+      `Time (hrs)` = time,
+      `Estimate (%)` = round(estimate__ * 100, 2),
+      `Lower (%)` = round(lower__ * 100, 2),
+      `Upper (%)` = round(upper__ * 100, 2)
+    ),
+  conditional_effects(mod.6)[[1]] %>%
+    mutate(cutoff = "Yes") %>%
+    transmute(
+      Cutoff = cutoff,
+      `Time (hrs)` = time,
+      `Estimate (%)` = round(estimate__ * 100, 2),
+      `Lower (%)` = round(lower__ * 100, 2),
+      `Upper (%)` = round(upper__ * 100, 2)
+    )
+) %>%
+  arrange(Cutoff, `Time (hrs)`)
+
+knitr::kable(
+  ce10_time,
+  caption = "Modeled estimates from conditional effects (Experiment 10): time",
+  format = "html"
+)
+```
+
+<!-- Pairwise comparisons removed -->
+
+```{r exp10-pairwise, include=FALSE, eval=FALSE}
+
+pairwise_time <- dplyr::bind_rows(
+  {
+    emm <- emmeans::emmeans(mod.5, ~ time, type = "response")
+    pr <- emmeans::contrast(emm, method = "pairwise", adjust = "tukey")
+    d <- as.data.frame(summary(pr))
+    d$Cutoff <- "No"
+    est_col <- if ("estimate" %in% names(d)) "estimate" else if ("diff" %in% names(d)) "diff" else if ("difference" %in% names(d)) "difference" else {
+      num_cols <- names(d)[sapply(d, is.numeric)]
+      num_cols <- setdiff(num_cols, c("SE", "SE.difference", "p.value"))
+      if (length(num_cols) < 1) stop("Pairwise table: could not infer numeric estimate/difference column.")
+      num_cols[1]
+    }
+    se_col <- if ("SE" %in% names(d)) "SE" else if ("SE.difference" %in% names(d)) "SE.difference" else {
+      se_like <- names(d)[grepl("^SE$|se\\b|SE\\.|Std\\.Error|std\\.error", names(d), ignore.case = TRUE)]
+      se_like <- intersect(se_like, names(d)[sapply(d, is.numeric)])
+      if (length(se_like) < 1) NA_character_ else se_like[1]
+    }
+    p_col <- if ("p.value" %in% names(d)) "p.value" else {
+      p_like <- names(d)[grepl("^p\\.value$|p\\.val|pvalue|p\\.adj|adj\\.p|p$", names(d), ignore.case = TRUE)]
+      p_like <- intersect(p_like, names(d)[sapply(d, is.numeric)])
+      if (length(p_like) < 1) NA_character_ else p_like[1]
+    }
+    d %>%
+      mutate(
+        `Difference (pp)` = round(.data[[est_col]] * 100, 2),
+        `SE (pp)` = if (!is.na(se_col)) round(.data[[se_col]] * 100, 2) else NA_real_,
+        `p-value` = if (!is.na(p_col)) round(.data[[p_col]], 2) else NA_real_
+      ) %>%
+      transmute(Cutoff, Contrast = contrast, `Difference (pp)`, `SE (pp)`, `p-value`)
+  },
+  {
+    emm <- emmeans::emmeans(mod.6, ~ time, type = "response")
+    pr <- emmeans::contrast(emm, method = "pairwise", adjust = "tukey")
+    d <- as.data.frame(summary(pr))
+    d$Cutoff <- "Yes"
+    est_col <- if ("estimate" %in% names(d)) "estimate" else if ("diff" %in% names(d)) "diff" else if ("difference" %in% names(d)) "difference" else {
+      num_cols <- names(d)[sapply(d, is.numeric)]
+      num_cols <- setdiff(num_cols, c("SE", "SE.difference", "p.value"))
+      if (length(num_cols) < 1) stop("Pairwise table: could not infer numeric estimate/difference column.")
+      num_cols[1]
+    }
+    se_col <- if ("SE" %in% names(d)) "SE" else if ("SE.difference" %in% names(d)) "SE.difference" else {
+      se_like <- names(d)[grepl("^SE$|se\\b|SE\\.|Std\\.Error|std\\.error", names(d), ignore.case = TRUE)]
+      se_like <- intersect(se_like, names(d)[sapply(d, is.numeric)])
+      if (length(se_like) < 1) NA_character_ else se_like[1]
+    }
+    p_col <- if ("p.value" %in% names(d)) "p.value" else {
+      p_like <- names(d)[grepl("^p\\.value$|p\\.val|pvalue|p\\.adj|adj\\.p|p$", names(d), ignore.case = TRUE)]
+      p_like <- intersect(p_like, names(d)[sapply(d, is.numeric)])
+      if (length(p_like) < 1) NA_character_ else p_like[1]
+    }
+    d %>%
+      mutate(
+        `Difference (pp)` = round(.data[[est_col]] * 100, 2),
+        `SE (pp)` = if (!is.na(se_col)) round(.data[[se_col]] * 100, 2) else NA_real_,
+        `p-value` = if (!is.na(p_col)) round(.data[[p_col]], 2) else NA_real_
+      ) %>%
+      transmute(Cutoff, Contrast = contrast, `Difference (pp)`, `SE (pp)`, `p-value`)
+  }
+)
+
+knitr::kable(
+  pairwise_time,
+  caption = "Pairwise comparisons between time levels (Experiment 10; Tukey-adjusted): response scale (pp)",
+  format = "html"
+)
+```
+
+:::
+
+## QPCR results 2025
 
 <details><summary>Wrangling & Summary</summary>
 ```{r}
@@ -400,15 +742,9 @@ df <- df |>
   mutate(sub_method = paste0(method, sep = "_", method_name)) |>
   droplevels()
 
-df |> group_by(method, week_ord) |> tally()
 str(df)
 ```
 </details>
-
-```{r}
-df |> ggplot(aes(x = week_ord, y = pa, color = method)) +
-  geom_jitter()
-```
 
 # Methods:
 
@@ -418,12 +754,11 @@ For all models a Bernoulli distribution was selected with a logit link function 
 
 Model validation was performed using prior and posterior predictive checks, as well as effective samples sizes and r-hats (McElreath, 2020).
 
-## qPCR Experiment 6
+## qPCR Experiment
 
-### Analyses
+::: {.panel-tabset}
 
-<details><summary>Models</summary>
-```{r}
+```{r qpcr-models-fit, include=FALSE}
 mod_formula <- bf(pa ~ method + mo(week_ord, id = "method") + gp(row, col) + s(increase_in_pvh_number) + s(volume_in_container_ml) + (1|replicate))
 
 priors <- prior(normal(0, 1.5), class = b)
@@ -433,7 +768,7 @@ mod_1 <- brm(
   family = bernoulli(link = "logit"),
   prior = priors,
   data = df,
-  file = paste0(here::here("outputs/models/mod_1_2025.Rmd")),
+  file = paste0(here::here("outputs/models/mod.7.Rmd")),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   backend = "cmdstanr", silent = 0, refresh = 100,
   chains = 4, cores = 4, warmup = 1000, iter = 2000
@@ -446,7 +781,7 @@ mod_2 <- brm(
   family = bernoulli(link = "logit"),
   prior = priors,
   data = df,
-  file = paste0(here::here("outputs/models/mod_2_2026.Rmd")),
+  file = paste0(here::here("outputs/models/mod.8.Rmd")),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   backend = "cmdstanr", silent = 0, refresh = 100,
   chains = 4, cores = 4, warmup = 1000, iter = 2000
@@ -459,60 +794,135 @@ mod_3 <- brm(
   family = bernoulli(link = "logit"),
   prior = priors,
   data = df,
-  file = paste0(here::here("outputs/models/mod_3_2026.Rmd")),
+  file = paste0(here::here("outputs/models/mod.9.Rmd")),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   backend = "cmdstanr", silent = 0, refresh = 100,
   chains = 4, cores = 4, warmup = 1000, iter = 2000
 )
 ```
-</details>
 
-<details><summary>Validation</summary>
-```{r, echo=FALSE, message=FALSE, fig.show='hold', out.width='50%'}
-pp_check(mod_1, ndraws = 200)
-pp_check(mod_2, ndraws = 200)
-pp_check(mod_3, ndraws = 200)
-```
-</details>
+## Effect plots
 
-<details><summary>Output</summary>
-```{r, echo=FALSE}
-summary(mod_1)
-summary(mod_2)
-summary(mod_3)
-```
-</details>
+### Model 1 (all effects)
 
-### Effect Plots
+```{r qpcr-eff1, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4, out.width='100%', dpi = 600}
+ce_qpcr_1 <- conditional_effects(mod_1, effects = "week_ord:method")
+p_qpcr_1 <- plot(ce_qpcr_1)[[1]]
 
-## Model 1 (all effects)
+ggplot2::ggsave(
+  filename = here::here("outputs/plots", "qpcr_effect_1.png"),
+  plot = p_qpcr_1,
+  width = knitr::opts_current$get("fig.width"),
+  height = knitr::opts_current$get("fig.height"),
+  dpi = 600
+)
 
-```{r, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4, out.width='100%', dpi = 600}
-conditional_effects(mod_1, effects = "week_ord:method")
-conditional_effects(mod_1)
+p_qpcr_1
 ```
 
 Figure 1: Conditional effect plot of GBV exposure on the probability of detection. Error bars represent 95% credible intervals with points representing the mean estimate.
 
-## Model 2 (increase in pvh and method only)
+### Model 2 (increase in pvh and method only)
 
-```{r, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4, out.width='100%', dpi = 600}
-conditional_effects(mod_2, effects = "increase_in_pvh_number:method")
-conditional_effects(mod_2)
+```{r qpcr-eff2, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4, out.width='100%', dpi = 600}
+ce_qpcr_2 <- conditional_effects(mod_2, effects = "increase_in_pvh_number:method")
+p_qpcr_2 <- plot(ce_qpcr_2)[[1]]
+
+ggplot2::ggsave(
+  filename = here::here("outputs/plots", "qpcr_effect_2.png"),
+  plot = p_qpcr_2,
+  width = knitr::opts_current$get("fig.width"),
+  height = knitr::opts_current$get("fig.height"),
+  dpi = 600
+)
+
+p_qpcr_2
 ```
 
 Figure 2: Conditional effect plot of GBV exposure on the probability of detection. Error bars represent 95% credible intervals with points representing the mean estimate.
 
-## Model 3 (increase in pvh and sub method only)
+### Model 3 (increase in pvh and sub method only)
 
-```{r, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4, out.width='100%', dpi = 600}
-conditional_effects(mod_3, effects = "increase_in_pvh_number:sub_method")
-conditional_effects(mod_3)
+```{r qpcr-eff3, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4, out.width='100%', dpi = 600}
+ce_qpcr_3 <- conditional_effects(mod_3, effects = "increase_in_pvh_number:sub_method")
+p_qpcr_3 <- plot(ce_qpcr_3)[[1]]
+
+ggplot2::ggsave(
+  filename = here::here("outputs/plots", "qpcr_effect_3.png"),
+  plot = p_qpcr_3,
+  width = knitr::opts_current$get("fig.width"),
+  height = knitr::opts_current$get("fig.height"),
+  dpi = 600
+)
+
+p_qpcr_3
 ```
 
-## Results
+## Models
 
-In Bayesian analysis, explanatory variables are considered "important" (significant) if their 95% credible interval (95% CI) is exclusive of zero.
+```{r qpcr-models-show, ref.label="qpcr-models-fit", echo=TRUE, eval=FALSE}
+
+```
+
+## Model Comparison
+
+```{r qpcr-waic, echo=FALSE}
+waic_tbl_one <- function(m, model_name) {
+  w <- brms::waic(m)
+  est <- w$estimates
+  rn <- rownames(est)
+  waic_row <- if ("waic" %in% rn) "waic" else if ("WAIC" %in% rn) "WAIC" else rn[1]
+  tibble::tibble(
+    Model = model_name,
+    WAIC = as.numeric(est[waic_row, "Estimate"]),
+    SE = as.numeric(est[waic_row, "SE"])
+  )
+}
+
+waic_tbl <- dplyr::bind_rows(
+  waic_tbl_one(mod_1, "mod_1"),
+  waic_tbl_one(mod_2, "mod_2"),
+  waic_tbl_one(mod_3, "mod_3")
+) %>%
+  dplyr::mutate(
+    delta_WAIC = WAIC - min(WAIC, na.rm = TRUE)
+  ) %>%
+  dplyr::arrange(WAIC) %>%
+  dplyr::mutate(
+    WAIC = round(WAIC, 2),
+    SE = round(SE, 2),
+    delta_WAIC = round(delta_WAIC, 2)
+  )
+
+knitr::kable(
+  waic_tbl,
+  caption = "Model comparison (qPCR Experiment): WAIC (lower is better)",
+  format = "html"
+)
+```
+
+## Validation
+
+```{r qpcr-pp-check}
+#| echo: false
+#| message: false
+#| fig-show: hold
+#| layout-ncol: 2
+pp_check(mod_1, ndraws = 200, col = 2)
+pp_check(mod_2, ndraws = 200, col = 2)
+pp_check(mod_3, ndraws = 200, col = 2)
+```
+
+## Output
+
+```{r qpcr-summary, echo=FALSE}
+summary(mod_1)
+summary(mod_2)
+summary(mod_3)
+```
+
+
+:::
 
 # References
 
