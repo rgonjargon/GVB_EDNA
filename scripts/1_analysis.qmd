@@ -104,6 +104,8 @@ df.6.d <- df.6.d %>%
 ```{r exp6-summary-tibbles, echo=FALSE}
 print(df.6 %>% group_by(sample, time) %>% tally())
 print(df.6.d %>% group_by(sample, number) %>% tally())
+str(df.6)
+str(df.6.d)
 ```
 
 </details>
@@ -178,7 +180,11 @@ p_exp6_eff1 <- c_eff %>% ggplot(aes(x = time, y = estimate__, ymin = lower__, ym
   geom_errorbar(position = position_dodge(width = -0.5), width = 0.3, size = 1) +
   geom_point(position = position_dodge(width = -0.5), size = 3, alpha = 0.5) +
   theme_bw() +
-  scale_y_continuous(labels = scales::percent) +
+  scale_y_continuous(
+    labels = scales::percent,
+    limits = c(0, 1),
+    expand = ggplot2::expansion(mult = c(0.02, 0.02))
+  ) +
   scale_color_manual(values = c("darkblue", "darkgreen")) +
   labs(x = "GVB exposure (hrs)", y = "Probability of detection (%)") +
   guides(color = guide_legend(title="Cq cut off (> 39)", reverse = TRUE))
@@ -210,7 +216,11 @@ p_exp6_eff2 <- c_eff %>% ggplot(aes(x = cutoff, y = estimate__, ymin = lower__, 
   geom_errorbar(position = position_dodge(width = 0.5), width = 0.3, size = 1) +
   geom_point(position = position_dodge(width = 0.5), size = 3, alpha = 0.5) +
   theme_bw() +
-  scale_y_continuous(labels = scales::percent) +
+  scale_y_continuous(
+    labels = scales::percent,
+    limits = c(0, 1),
+    expand = ggplot2::expansion(mult = c(0.02, 0.02))
+  ) +
   scale_color_manual(values = c("darkgreen", "darkblue")) +
   labs(x = "Cq cut off (> 39)", y = "Probability of detection (%)") +
   guides(color=guide_legend(title="Cq cut off (> 39)")) +
@@ -512,6 +522,7 @@ df.10 <- df.10 %>%
 
 ```{r exp10-summary-tibbles, echo=FALSE}
 print(df.10 %>% group_by(sample, time) %>% tally())
+str(df.10)
 ```
 
 </details>
@@ -560,7 +571,11 @@ p_exp10_eff <- c_eff %>% ggplot(aes(x = time, y = estimate__, ymin = lower__, ym
   geom_errorbar(position = position_dodge(width = -0.5), width = 0.3, size = 1) +
   geom_point(position = position_dodge(width = -0.5), size = 3, alpha = 0.5) +
   theme_bw() +
-  scale_y_continuous(labels = scales::percent) +
+  scale_y_continuous(
+    labels = scales::percent,
+    limits = c(0, 1),
+    expand = ggplot2::expansion(mult = c(0.02, 0.02))
+  ) +
   scale_color_manual(values = c("darkblue", "darkgreen")) +
   labs(x = "GVB exposure (hrs)", y = "Probability of detection (%)") +
   guides(color=guide_legend(title="Cq cut off (> 39)", reverse = TRUE))
@@ -710,9 +725,9 @@ knitr::kable(
 
 :::
 
-## QPCR results 2025
+## QPCR experiment
 
-<details><summary>Wrangling & Summary</summary>
+<details><summary>Data frames</summary>
 ```{r}
 #read in data ----
 df <- read_excel(here::here("analysis/data/qPCR_results251017_forTom.xlsx"), sheet = 1) # Import .xlsx file
@@ -746,46 +761,10 @@ str(df)
 ```
 </details>
 
-# Methods:
-
-To compare the probability of detection (%) of GVB at different exposure levels (0, 2, 6, 16, 24, 48 hrs), with and without a Cq cut off (i.e., if a Cq value was greater than 39 then classify as no detection), and GVB density (where data was available: at 2hr and 24hrs), generalized linear mixed effect (GLMM) models were performed in R (R Core Team 2022) using the brms package (Bürkner, 2017).
-
-For all models a Bernoulli distribution was selected with a logit link function to model the binary detection response (yes = 1, no = 0). The fixed effects of time and number of GBV were treated as monotonic predictors since they are ordered categories. An interaction term was included between time and number of GVB when this information was available. A random effect of sample was used for all models since measures were collected in triplicates. A weakly informative prior was used for the fixed effects to aid convergence (normal distribution with a mean of 0 and standard deviation of 1.5).
-
-Model validation was performed using prior and posterior predictive checks, as well as effective samples sizes and r-hats (McElreath, 2020).
-
-## qPCR Experiment
-
 ::: {.panel-tabset}
 
-```{r qpcr-models-fit, include=FALSE}
-mod_formula <- bf(pa ~ method + mo(week_ord, id = "method") + gp(row, col) + s(increase_in_pvh_number) + s(volume_in_container_ml) + (1|replicate))
-
+```{r qpcr-models-fit-submethod, include=FALSE}
 priors <- prior(normal(0, 1.5), class = b)
-
-mod_1 <- brm(
-  mod_formula,
-  family = bernoulli(link = "logit"),
-  prior = priors,
-  data = df,
-  file = paste0(here::here("outputs/models/mod.7.Rmd")),
-  threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
-  backend = "cmdstanr", silent = 0, refresh = 100,
-  chains = 4, cores = 4, warmup = 1000, iter = 2000
-)
-
-mod_formula <- bf(pa ~ method + s(increase_in_pvh_number, id = "method") + (1|replicate))
-
-mod_2 <- brm(
-  mod_formula,
-  family = bernoulli(link = "logit"),
-  prior = priors,
-  data = df,
-  file = paste0(here::here("outputs/models/mod.8.Rmd")),
-  threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
-  backend = "cmdstanr", silent = 0, refresh = 100,
-  chains = 4, cores = 4, warmup = 1000, iter = 2000
-)
 
 mod_formula <- bf(pa ~ sub_method + s(increase_in_pvh_number, id = "sub_method") + (1|replicate))
 
@@ -799,74 +778,369 @@ mod_3 <- brm(
   backend = "cmdstanr", silent = 0, refresh = 100,
   chains = 4, cores = 4, warmup = 1000, iter = 2000
 )
-```
 
-## Effect plots
+# sub_method × PVH: linear (separate slopes per sub-method)
+mod_formula <- bf(pa ~ sub_method * increase_in_pvh_number + (1|replicate))
 
-### Model 1 (all effects)
-
-```{r qpcr-eff1, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4, out.width='100%', dpi = 600}
-ce_qpcr_1 <- conditional_effects(mod_1, effects = "week_ord:method")
-p_qpcr_1 <- plot(ce_qpcr_1)[[1]]
-
-ggplot2::ggsave(
-  filename = here::here("outputs/plots", "qpcr_effect_1.png"),
-  plot = p_qpcr_1,
-  width = knitr::opts_current$get("fig.width"),
-  height = knitr::opts_current$get("fig.height"),
-  dpi = 600
+mod_4 <- brm(
+  mod_formula,
+  family = bernoulli(link = "logit"),
+  prior = priors,
+  data = df,
+  file = paste0(here::here("outputs/models/mod.10.Rmd")),
+  threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+  backend = "cmdstanr", silent = 0, refresh = 100,
+  chains = 4, cores = 4, warmup = 1000, iter = 2000
 )
 
-p_qpcr_1
-```
+# sub_method × PVH: one shared smooth; sub-method shifts intercept only
+mod_formula <- bf(pa ~ sub_method + s(increase_in_pvh_number) + (1|replicate))
 
-Figure 1: Conditional effect plot of GBV exposure on the probability of detection. Error bars represent 95% credible intervals with points representing the mean estimate.
-
-### Model 2 (increase in pvh and method only)
-
-```{r qpcr-eff2, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4, out.width='100%', dpi = 600}
-ce_qpcr_2 <- conditional_effects(mod_2, effects = "increase_in_pvh_number:method")
-p_qpcr_2 <- plot(ce_qpcr_2)[[1]]
-
-ggplot2::ggsave(
-  filename = here::here("outputs/plots", "qpcr_effect_2.png"),
-  plot = p_qpcr_2,
-  width = knitr::opts_current$get("fig.width"),
-  height = knitr::opts_current$get("fig.height"),
-  dpi = 600
+mod_5 <- brm(
+  mod_formula,
+  family = bernoulli(link = "logit"),
+  prior = priors,
+  data = df,
+  file = paste0(here::here("outputs/models/mod.11.Rmd")),
+  threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+  backend = "cmdstanr", silent = 0, refresh = 100,
+  chains = 4, cores = 4, warmup = 1000, iter = 2000
 )
 
-p_qpcr_2
-```
+# sub_method × PVH: separate smooths per sub-method (mgcv-style by)
+mod_formula <- bf(pa ~ sub_method + s(increase_in_pvh_number, by = sub_method) + (1|replicate))
 
-Figure 2: Conditional effect plot of GBV exposure on the probability of detection. Error bars represent 95% credible intervals with points representing the mean estimate.
-
-### Model 3 (increase in pvh and sub method only)
-
-```{r qpcr-eff3, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4, out.width='100%', dpi = 600}
-ce_qpcr_3 <- conditional_effects(mod_3, effects = "increase_in_pvh_number:sub_method")
-p_qpcr_3 <- plot(ce_qpcr_3)[[1]]
-
-ggplot2::ggsave(
-  filename = here::here("outputs/plots", "qpcr_effect_3.png"),
-  plot = p_qpcr_3,
-  width = knitr::opts_current$get("fig.width"),
-  height = knitr::opts_current$get("fig.height"),
-  dpi = 600
+mod_6 <- brm(
+  mod_formula,
+  family = bernoulli(link = "logit"),
+  prior = priors,
+  data = df,
+  file = paste0(here::here("outputs/models/mod.12.Rmd")),
+  threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+  backend = "cmdstanr", silent = 0, refresh = 100,
+  chains = 4, cores = 4, warmup = 1000, iter = 2000
 )
 
-p_qpcr_3
+# + monotonic week within sub_method (parallel to mod_3–mod_6)
+mod_formula <- bf(
+  pa ~ sub_method + mo(week_ord, id = "sub_method") + s(increase_in_pvh_number, id = "sub_method") + (1|replicate)
+)
+
+mod_7 <- brm(
+  mod_formula,
+  family = bernoulli(link = "logit"),
+  prior = priors,
+  data = df,
+  file = paste0(here::here("outputs/models/mod.14.Rmd")),
+  threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+  backend = "cmdstanr", silent = 0, refresh = 100,
+  chains = 4, cores = 4, warmup = 1000, iter = 2000
+)
+
+mod_formula <- bf(
+  pa ~ sub_method * increase_in_pvh_number + mo(week_ord, id = "sub_method") + (1|replicate)
+)
+
+mod_8 <- brm(
+  mod_formula,
+  family = bernoulli(link = "logit"),
+  prior = priors,
+  data = df,
+  file = paste0(here::here("outputs/models/mod.15.Rmd")),
+  threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+  backend = "cmdstanr", silent = 0, refresh = 100,
+  chains = 4, cores = 4, warmup = 1000, iter = 2000
+)
+
+mod_formula <- bf(
+  pa ~ sub_method + mo(week_ord, id = "sub_method") + s(increase_in_pvh_number) + (1|replicate)
+)
+
+mod_9 <- brm(
+  mod_formula,
+  family = bernoulli(link = "logit"),
+  prior = priors,
+  data = df,
+  file = paste0(here::here("outputs/models/mod.16.Rmd")),
+  threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+  backend = "cmdstanr", silent = 0, refresh = 100,
+  chains = 4, cores = 4, warmup = 1000, iter = 2000
+)
+
+mod_formula <- bf(
+  pa ~ sub_method + mo(week_ord, id = "sub_method") + s(increase_in_pvh_number, by = sub_method) + (1|replicate)
+)
+
+mod_10 <- brm(
+  mod_formula,
+  family = bernoulli(link = "logit"),
+  prior = priors,
+  data = df,
+  file = paste0(here::here("outputs/models/mod.17.Rmd")),
+  threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+  backend = "cmdstanr", silent = 0, refresh = 100,
+  chains = 4, cores = 4, warmup = 1000, iter = 2000
+)
+
+# sub_method × monotonic week + separate PVH smooths per sub-method
+mod_formula <- bf(
+  pa ~ sub_method * mo(week_ord, id = "sub_method") + s(increase_in_pvh_number, by = sub_method) + (1|replicate)
+)
+
+mod_11 <- brm(
+  mod_formula,
+  family = bernoulli(link = "logit"),
+  prior = priors,
+  data = df,
+  file = paste0(here::here("outputs/models/mod.18.Rmd")),
+  threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+  backend = "cmdstanr", silent = 0, refresh = 100,
+  chains = 4, cores = 4, warmup = 1000, iter = 2000
+)
 ```
 
-## Models
+```{r qpcr-eff-helpers, include=FALSE}
+qpcr_sub_method_label <- function(x) {
+  lbl <- vapply(as.character(x), function(s) {
+    p <- strsplit(s, "_", fixed = TRUE)[[1]]
+    if (length(p) == 0L) {
+      return(s)
+    }
+    letter_lab <- dplyr::case_match(
+      p[[1]],
+      "b" ~ "B",
+      "c" ~ "C",
+      "d" ~ "D",
+      .default = stringr::str_to_title(p[[1]])
+    )
+    if (length(p) == 1L) {
+      return(paste0("Method ", letter_lab))
+    }
+    rest <- stringr::str_replace_all(paste(p[-1L], collapse = "_"), "_", " ")
+    rest <- stringr::str_to_title(rest)
+    paste0("Method ", letter_lab, " — ", rest)
+  }, character(1))
+  factor(lbl, levels = sort(unique(lbl)))
+}
 
-```{r qpcr-models-show, ref.label="qpcr-models-fit", echo=TRUE, eval=FALSE}
+# Shared qPCR figure: PVH × sub_method conditional effects (ghost + focal facets)
+qpcr_plot_pvh_by_submethod <- function(fit) {
+  c_eff <- conditional_effects(fit, effects = "increase_in_pvh_number:sub_method")[[1]] %>%
+    dplyr::arrange(sub_method, increase_in_pvh_number) %>%
+    dplyr::mutate(sub_method_l = qpcr_sub_method_label(sub_method))
+  panel_levels <- levels(c_eff$sub_method_l)
+  ghost <- purrr::map_dfr(panel_levels, function(f) {
+    c_eff %>%
+      dplyr::filter(as.character(.data$sub_method_l) != as.character(f)) %>%
+      dplyr::mutate(facet_panel = factor(f, levels = panel_levels))
+  })
+  focal <- c_eff %>%
+    dplyr::mutate(facet_panel = factor(.data$sub_method_l, levels = panel_levels))
+  obs_raw <- fit$data %>%
+    dplyr::mutate(
+      sub_method_l = qpcr_sub_method_label(.data$sub_method),
+      facet_panel = factor(.data$sub_method_l, levels = panel_levels)
+    )
+  ggplot2::ggplot() +
+    ggplot2::geom_jitter(
+      data = obs_raw,
+      ggplot2::aes(x = increase_in_pvh_number, y = pa),
+      inherit.aes = FALSE,
+      height = 0.04,
+      width = 0.15,
+      alpha = 0.35,
+      size = 0.85,
+      color = "black",
+      stroke = 0
+    ) +
+    ggplot2::geom_ribbon(
+      data = ghost,
+      ggplot2::aes(
+        x = increase_in_pvh_number, ymin = lower__, ymax = upper__,
+        group = sub_method_l
+      ),
+      inherit.aes = FALSE,
+      fill = "gray45",
+      alpha = 0.04
+    ) +
+    ggplot2::geom_line(
+      data = ghost,
+      ggplot2::aes(x = increase_in_pvh_number, y = estimate__, group = sub_method_l),
+      inherit.aes = FALSE,
+      color = "gray40",
+      linewidth = 0.5,
+      alpha = 0.1
+    ) +
+    ggplot2::geom_ribbon(
+      data = focal,
+      ggplot2::aes(
+        x = increase_in_pvh_number, ymin = lower__, ymax = upper__,
+        fill = sub_method_l, group = sub_method_l
+      ),
+      inherit.aes = FALSE,
+      alpha = 0.2,
+      color = NA
+    ) +
+    ggplot2::geom_line(
+      data = focal,
+      ggplot2::aes(
+        x = increase_in_pvh_number, y = estimate__,
+        color = sub_method_l, group = sub_method_l
+      ),
+      inherit.aes = FALSE,
+      linewidth = 1
+    ) +
+    ggplot2::facet_wrap(ggplot2::vars(facet_panel), ncol = 3, scales = "fixed") +
+    ggplot2::theme_classic() +
+    ggplot2::theme(
+      strip.text = ggplot2::element_text(size = 9),
+      legend.position = "none"
+    ) +
+    ggplot2::scale_y_continuous(
+      labels = scales::percent,
+      limits = c(0, 1),
+      expand = ggplot2::expansion(mult = c(0.02, 0.02))
+    ) +
+    ggplot2::scale_color_brewer(palette = "Dark2", type = "qual") +
+    ggplot2::scale_fill_brewer(palette = "Dark2", type = "qual") +
+    ggplot2::labs(x = "PVH number", y = "Probability of detection (%)")
+}
 
+# Week × sub_method: posterior mean response at each (week_ord, sub_method), holding
+# increase_in_pvh_number at its within–sub-method median and replicate at a reference level.
+# Uses posterior_epred() so it behaves for all PVH structures (linear, shared spline, `by`)
+# — conditional_effects("week_ord:sub_method") is unreliable for e.g. mod_10 / mod_11.
+qpcr_plot_week_by_submethod <- function(fit) {
+  d <- fit$data
+
+  wk <- d$week_ord
+  if (is.factor(wk)) {
+    wk_lvls <- levels(wk)
+    wk_ordered <- is.ordered(wk)
+  } else {
+    wk_lvls <- unique(as.character(wk[!is.na(wk)]))
+    wk_ordered <- TRUE
+  }
+
+  sm <- d$sub_method
+  if (!is.factor(sm)) {
+    sm <- factor(sm, levels = unique(as.character(sm[!is.na(sm)])))
+  } else {
+    sm <- droplevels(sm)
+  }
+  sm_lvls <- levels(sm)
+
+  rp <- d$replicate
+  if (!is.factor(rp)) {
+    rp <- factor(rp, levels = unique(as.character(rp[!is.na(rp)])))
+  } else {
+    rp <- droplevels(rp)
+  }
+  rep_lvls <- levels(rp)
+  rep_ref <- rep_lvls[[1L]]
+
+  if (length(wk_lvls) < 1L || length(sm_lvls) < 1L) {
+    stop("fit$data is missing week_ord or sub_method factor levels.")
+  }
+  med_pvh <- tapply(d$increase_in_pvh_number, sm, stats::median, na.rm = TRUE)
+  med_pvh <- med_pvh[sm_lvls]
+  if (any(is.na(med_pvh))) {
+    stop("Could not compute median PVH for every sub_method level.")
+  }
+  rows <- tidyr::expand_grid(
+    week_ord = factor(wk_lvls, levels = wk_lvls, ordered = wk_ordered),
+    sub_method = factor(sm_lvls, levels = sm_lvls)
+  )
+  rows$increase_in_pvh_number <- as.numeric(med_pvh[as.character(rows$sub_method)])
+  rows$replicate <- factor(rep_ref, levels = rep_lvls)
+
+  nd <- tryCatch(
+    min(1000L, as.integer(brms::nsamples(fit))),
+    error = function(...) 1000L
+  )
+  if (!is.finite(nd) || nd < 1L) nd <- 1000L
+  ep <- brms::posterior_epred(
+    object = fit,
+    newdata = rows,
+    re_formula = NA,
+    ndraws = nd
+  )
+  rq <- apply(ep, 2L, stats::quantile, probs = c(0.025, 0.5, 0.975), na.rm = TRUE)
+  c_eff <- rows %>%
+    dplyr::mutate(
+      lower__ = as.numeric(rq[1, ]),
+      estimate__ = as.numeric(rq[2, ]),
+      upper__ = as.numeric(rq[3, ])
+    ) %>%
+    dplyr::filter(is.finite(estimate__)) %>%
+    dplyr::mutate(sub_method_l = qpcr_sub_method_label(sub_method))
+  if (nrow(c_eff) < 1L) {
+    stop("posterior_epred returned no usable week × sub-method estimates.")
+  }
+
+  panel_levels <- levels(c_eff$sub_method_l)
+  plot_dat <- c_eff %>%
+    dplyr::mutate(facet_panel = factor(.data$sub_method_l, levels = panel_levels))
+  obs_raw <- d %>%
+    dplyr::mutate(
+      week_ord = factor(as.character(.data$week_ord), levels = wk_lvls, ordered = wk_ordered),
+      sub_method_l = qpcr_sub_method_label(.data$sub_method),
+      facet_panel = factor(.data$sub_method_l, levels = panel_levels)
+    )
+
+  n_col <- length(unique(c_eff$sub_method_l))
+  p <- ggplot2::ggplot(plot_dat) +
+    ggplot2::geom_jitter(
+      data = obs_raw,
+      ggplot2::aes(x = week_ord, y = pa),
+      inherit.aes = FALSE,
+      height = 0.04,
+      width = 0.18,
+      alpha = 0.35,
+      size = 0.85,
+      color = "black",
+      stroke = 0
+    ) +
+    ggplot2::geom_linerange(
+      ggplot2::aes(
+        x = week_ord,
+        ymin = lower__, ymax = upper__,
+        color = sub_method_l,
+        group = week_ord
+      ),
+      linewidth = 1
+    ) +
+    ggplot2::geom_point(
+      ggplot2::aes(
+        x = week_ord, y = estimate__,
+        color = sub_method_l,
+        group = week_ord
+      ),
+      size = 3,
+      alpha = 0.55
+    ) +
+    ggplot2::facet_wrap(ggplot2::vars(facet_panel), ncol = 3, scales = "fixed") +
+    ggplot2::theme_classic() +
+    ggplot2::theme(
+      strip.text = ggplot2::element_text(size = 9),
+      legend.position = "none"
+    ) +
+    ggplot2::scale_y_continuous(
+      labels = scales::percent,
+      limits = c(0, 1),
+      expand = ggplot2::expansion(mult = c(0.02, 0.02))
+    ) +
+    ggplot2::labs(x = "Week", y = "Probability of detection (%)")
+  if (n_col <= 8L) {
+    p <- p + ggplot2::scale_color_brewer(palette = "Dark2", type = "qual")
+  } else {
+    p <- p + ggplot2::scale_color_hue(l = 55, c = 80)
+  }
+  p
+}
 ```
 
-## Model Comparison
-
-```{r qpcr-waic, echo=FALSE}
+```{r qpcr-waic-compute, include=FALSE}
 waic_tbl_one <- function(m, model_name) {
   w <- brms::waic(m)
   est <- w$estimates
@@ -879,24 +1153,124 @@ waic_tbl_one <- function(m, model_name) {
   )
 }
 
-waic_tbl <- dplyr::bind_rows(
-  waic_tbl_one(mod_1, "mod_1"),
-  waic_tbl_one(mod_2, "mod_2"),
-  waic_tbl_one(mod_3, "mod_3")
+waic_tbl_pre <- dplyr::bind_rows(
+  waic_tbl_one(mod_3, "mod_3"),
+  waic_tbl_one(mod_4, "mod_4"),
+  waic_tbl_one(mod_5, "mod_5"),
+  waic_tbl_one(mod_6, "mod_6"),
+  waic_tbl_one(mod_7, "mod_7"),
+  waic_tbl_one(mod_8, "mod_8"),
+  waic_tbl_one(mod_9, "mod_9"),
+  waic_tbl_one(mod_10, "mod_10"),
+  waic_tbl_one(mod_11, "mod_11")
 ) %>%
-  dplyr::mutate(
-    delta_WAIC = WAIC - min(WAIC, na.rm = TRUE)
-  ) %>%
-  dplyr::arrange(WAIC) %>%
+  dplyr::mutate(model_id = as.integer(sub("^mod_", "", Model))) %>%
+  dplyr::arrange(WAIC, model_id)
+
+waic_tbl <- waic_tbl_pre %>%
+  dplyr::mutate(delta_WAIC = WAIC - min(WAIC, na.rm = TRUE)) %>%
   dplyr::mutate(
     WAIC = round(WAIC, 2),
     SE = round(SE, 2),
     delta_WAIC = round(delta_WAIC, 2)
-  )
+  ) %>%
+  dplyr::select(Model, WAIC, SE, delta_WAIC)
 
+qpcr_model_formula_lines <- c(
+  "3" = "bf(pa ~ sub_method + s(increase_in_pvh_number, id = \"sub_method\") + (1|replicate))",
+  "4" = "bf(pa ~ sub_method * increase_in_pvh_number + (1|replicate))",
+  "5" = "bf(pa ~ sub_method + s(increase_in_pvh_number) + (1|replicate))",
+  "6" = "bf(pa ~ sub_method + s(increase_in_pvh_number, by = sub_method) + (1|replicate))",
+  "7" = "bf(pa ~ sub_method + mo(week_ord, id = \"sub_method\") + s(increase_in_pvh_number, id = \"sub_method\") + (1|replicate))",
+  "8" = "bf(pa ~ sub_method * increase_in_pvh_number + mo(week_ord, id = \"sub_method\") + (1|replicate))",
+  "9" = "bf(pa ~ sub_method + mo(week_ord, id = \"sub_method\") + s(increase_in_pvh_number) + (1|replicate))",
+  "10" = "bf(pa ~ sub_method + mo(week_ord, id = \"sub_method\") + s(increase_in_pvh_number, by = sub_method) + (1|replicate))",
+  "11" = "bf(pa ~ sub_method * mo(week_ord, id = \"sub_method\") + s(increase_in_pvh_number, by = sub_method) + (1|replicate))"
+)
+```
+
+## Effect plots
+
+Side-by-side tabs for **`mod_10`** and **`mod_8`**. Each tab shows **week × sub-method** (`posterior_epred` on a full week × sub-method grid: median PVH per sub-method, reference replicate, `re_formula = NA`) and **PVH number × sub-method** (`conditional_effects`; other predictors at **brms** defaults). Figures are written to `outputs/plots/` as `qpcr_effect_mod10_*` and `qpcr_effect_mod8_*`.
+
+::: {.panel-tabset}
+
+## Effect plots (mod 10)
+
+```{r qpcr-effect-mod10, echo=FALSE, results="asis", fig.width=9, fig.height=6, out.width="100%", dpi=600}
+#| fig-keep: all
+fit <- mod_10
+gw <- knitr::opts_current$get("fig.width")
+gh <- knitr::opts_current$get("fig.height")
+cat("```r\n", qpcr_model_formula_lines[["10"]], "\n```\n\n", sep = "")
+cat("**Week × sub-method**\n\n")
+pw <- qpcr_plot_week_by_submethod(fit)
+ggplot2::ggsave(
+  filename = here::here("outputs/plots", "qpcr_effect_mod10_week.png"),
+  plot = pw,
+  width = gw,
+  height = 5,
+  dpi = 600
+)
+print(pw)
+cat("\n**PVH number × sub-method**\n\n")
+pp <- qpcr_plot_pvh_by_submethod(fit)
+ggplot2::ggsave(
+  filename = here::here("outputs/plots", "qpcr_effect_mod10_pvh.png"),
+  plot = pp,
+  width = gw,
+  height = gh,
+  dpi = 600
+)
+print(pp)
+```
+
+## Effect plots (mod 8)
+
+```{r qpcr-effect-mod8, echo=FALSE, results="asis", fig.width=9, fig.height=6, out.width="100%", dpi=600}
+#| fig-keep: all
+fit <- mod_8
+gw <- knitr::opts_current$get("fig.width")
+gh <- knitr::opts_current$get("fig.height")
+cat("```r\n", qpcr_model_formula_lines[["8"]], "\n```\n\n", sep = "")
+cat("**Week × sub-method**\n\n")
+pw <- qpcr_plot_week_by_submethod(fit)
+ggplot2::ggsave(
+  filename = here::here("outputs/plots", "qpcr_effect_mod8_week.png"),
+  plot = pw,
+  width = gw,
+  height = 5,
+  dpi = 600
+)
+print(pw)
+cat("\n**PVH number × sub-method**\n\n")
+pp <- qpcr_plot_pvh_by_submethod(fit)
+ggplot2::ggsave(
+  filename = here::here("outputs/plots", "qpcr_effect_mod8_pvh.png"),
+  plot = pp,
+  width = gw,
+  height = gh,
+  dpi = 600
+)
+print(pp)
+```
+
+:::
+
+## Models
+
+Sub-method formulations (`mod_3`–`mod_11`; includes monotonic week in `mod_7`–`mod_11`):
+
+```{r qpcr-models-show, ref.label="qpcr-models-fit-submethod", echo=TRUE, eval=FALSE}
+
+```
+
+## Model Comparison
+
+```{r qpcr-waic, echo=FALSE}
 knitr::kable(
   waic_tbl,
-  caption = "Model comparison (qPCR Experiment): WAIC (lower is better)",
+  caption = "Model comparison (qPCR Experiment): WAIC (lower is better).",
   format = "html"
 )
 ```
@@ -908,17 +1282,29 @@ knitr::kable(
 #| message: false
 #| fig-show: hold
 #| layout-ncol: 2
-pp_check(mod_1, ndraws = 200, col = 2)
-pp_check(mod_2, ndraws = 200, col = 2)
 pp_check(mod_3, ndraws = 200, col = 2)
+pp_check(mod_4, ndraws = 200, col = 2)
+pp_check(mod_5, ndraws = 200, col = 2)
+pp_check(mod_6, ndraws = 200, col = 2)
+pp_check(mod_7, ndraws = 200, col = 2)
+pp_check(mod_8, ndraws = 200, col = 2)
+pp_check(mod_9, ndraws = 200, col = 2)
+pp_check(mod_10, ndraws = 200, col = 2)
+pp_check(mod_11, ndraws = 200, col = 2)
 ```
 
 ## Output
 
 ```{r qpcr-summary, echo=FALSE}
-summary(mod_1)
-summary(mod_2)
 summary(mod_3)
+summary(mod_4)
+summary(mod_5)
+summary(mod_6)
+summary(mod_7)
+summary(mod_8)
+summary(mod_9)
+summary(mod_10)
+summary(mod_11)
 ```
 
 
