@@ -7,6 +7,7 @@
 # Data and generated artifacts
 analysis/data/
 analysis/output/models/
+/models/
 outputs/plots/
 
 # Quarto render artifacts

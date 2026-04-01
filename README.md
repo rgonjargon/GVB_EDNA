@@ -1,6 +1,6 @@
-# 241206_Justine
+# GBV Detection Analysis
 
-Project for R analyses and manuscript figures rendered with Quarto.
+Bayesian GLMM analyses and manuscript figures in R, rendered with Quarto (see `scripts/1_analysis.qmd`).
 
 ## Folder structure
 
@@ -16,7 +16,7 @@ scripts/
   1_analysis.qmd         # Main Quarto analysis document (source + render target)
 
 .gitignore
-241206_Justine.Rproj
+project.Rproj
 ```
 
 ## Quick start
