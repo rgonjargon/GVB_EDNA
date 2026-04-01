@@ -5,12 +5,12 @@ Bayesian GLMM analyses and manuscript figures in R, rendered with Quarto (see `s
 ## Folder structure
 
 ```text
-analysis/                # Input data (local)
-  data/                  # Raw spreadsheets (git-ignored)
+analysis/
+  data/                  # Raw spreadsheets (local only; not committed)
 
 outputs/
-  models/                # Cached brms model fits (git-ignored)
-  plots/                 # Rendered figure images (git-ignored)
+  models/                # Cached brms model fits (.rds) from 1_analysis.qmd
+  plots/                 # Manuscript figure PNGs (600 dpi), committed
 
 scripts/
   1_analysis.qmd         # Main Quarto analysis document (source + render target)
@@ -26,8 +26,8 @@ project.Rproj
 
 ## Outputs
 
-- **Models**: `scripts/1_analysis.qmd` writes cached model objects under `outputs/models/`.
-- **Figures**: effect plots are saved under `outputs/plots/` at **600 dpi** with the same dimensions as rendered in the Quarto HTML.
+- **Models**: `scripts/1_analysis.qmd` saves cached fits under `outputs/models/` (`.rds` files).
+- **Figures**: effect and qPCR plots are written to `outputs/plots/` at **600 dpi** (same dimensions as in the rendered Quarto HTML). This folder is part of the repo so manuscript figures are available without re-running the models.
 
 ## Dependencies
 
