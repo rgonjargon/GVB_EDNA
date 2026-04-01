@@ -1209,7 +1209,7 @@ ggplot2::ggsave(
   filename = here::here("outputs/plots", "qpcr_effect_mod10_week.png"),
   plot = pw,
   width = gw,
-  height = 5,
+  height = gh,
   dpi = 600
 )
 print(pw)
@@ -1239,7 +1239,7 @@ ggplot2::ggsave(
   filename = here::here("outputs/plots", "qpcr_effect_mod8_week.png"),
   plot = pw,
   width = gw,
-  height = 5,
+  height = gh,
   dpi = 600
 )
 print(pw)
