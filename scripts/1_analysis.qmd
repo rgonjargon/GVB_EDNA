@@ -80,7 +80,8 @@ df.6[, cols] <- lapply(df.6[, cols], as.factor)
 
 df.6 <- df.6 %>%
   mutate(time = ordered(time)) %>%
-  mutate(positive_cut = ifelse(cq > 39, 0, positive))
+  mutate(positive_cut = ifelse(cq > 39, 0, positive)) %>%
+  mutate(time_cat = factor(as.character(time), levels = levels(time), ordered = FALSE))
 
 df.6.2h <- read_excel(here::here("analysis/data/Exp6-Number-2h.xlsx"), sheet = 1) %>%
   mutate(time = "2")
@@ -96,16 +97,114 @@ df.6.d <- df.6.d %>%
   mutate(time = ordered(time)) %>%
   mutate(number = ordered(number)) %>%
   mutate(positive = ifelse(is.na(positive), 0, positive)) %>%
-  mutate(positive_cut = ifelse(cq > 39, 0, positive))
+  mutate(positive_cut = ifelse(cq > 39, 0, positive)) %>%
+  mutate(time_cat = factor(as.character(time), levels = levels(time), ordered = FALSE))
+
+# GVB reads workbooks (Exp 6 / Exp 10) — map to shared column names; same schema as df.6 time-course extras
+wrangle_exp6_reads_sheet <- function(rel_path, require_quantity_gbv = TRUE) {
+  path <- here::here(rel_path)
+  d <- read_excel(path, sheet = 1) %>% clean_names()
+  d <- dplyr::select(d, -dplyr::any_of("exp"))
+
+  if (!"time" %in% names(d) && "exposure_time_hours" %in% names(d)) {
+    d <- dplyr::rename(d, time = exposure_time_hours)
+  }
+  if (!"positive" %in% names(d) && "q_pcr_pos" %in% names(d)) {
+    d <- dplyr::rename(d, positive = q_pcr_pos)
+  }
+  if (!"positive" %in% names(d) && "qpcr_pos" %in% names(d)) {
+    d <- dplyr::rename(d, positive = qpcr_pos)
+  }
+
+  if (!"quantity_gbv" %in% names(d)) {
+    q_alias <- intersect(
+      c("quantity_gvb", "quanity_gvb", "quanity_gbv", "quantity_gbv"),
+      names(d)
+    )
+    if (length(q_alias)) {
+      d <- dplyr::rename(d, quantity_gbv = dplyr::all_of(q_alias[[1]]))
+    }
+  }
+  if (!"quantity_gbv" %in% names(d)) {
+    nms <- names(d)
+    iq <- nms[grepl("gbv", nms, ignore.case = TRUE)]
+    iq <- iq[grepl("quant|quani", iq, ignore.case = TRUE)]
+    if (length(iq) == 1L) {
+      d <- dplyr::rename(d, quantity_gbv = dplyr::all_of(iq))
+    }
+  }
+  if (require_quantity_gbv && !"quantity_gbv" %in% names(d)) {
+    stop(
+      "Reads sheet: could not map any column to `quantity_gbv` (expected names like `quantity_gvb` or `quanity_gvb` after clean_names). Found: ",
+      paste(names(d), collapse = ", ")
+    )
+  }
+
+  miss <- setdiff(c("time", "cq", "positive", "sample"), names(d))
+  if (length(miss)) {
+    stop(
+      "After clean_names() and renames, `", rel_path, "` must include: ",
+      paste(miss, collapse = ", "),
+      ". Found: ",
+      paste(names(d), collapse = ", ")
+    )
+  }
+
+  d$cq <- suppressWarnings(as.numeric(d$cq))
+  pv <- d$positive
+  if (is.numeric(pv)) {
+    d$positive <- ifelse(is.na(pv), NA_real_, as.integer(round(pv) != 0L))
+  } else {
+    ps <- toupper(stringr::str_trim(as.character(pv)))
+    d$positive <- dplyr::case_when(
+      is.na(ps) | ps == "" ~ NA_real_,
+      ps %in% c("1", "Y", "YES", "TRUE", "T", "POS", "POSITIVE") ~ 1,
+      TRUE ~ 0
+    )
+  }
+
+  fac_cols <- intersect(c("sample", "rep", "sample_id"), names(d))
+  for (cl in fac_cols) {
+    d[[cl]] <- as.factor(d[[cl]])
+  }
+
+  tnum <- suppressWarnings(as.numeric(d$time))
+  if (!all(is.na(tnum))) {
+    tlv <- sort(unique(tnum[!is.na(tnum)]))
+    d$time <- ordered(tnum, levels = tlv)
+  } else {
+    d$time <- ordered(as.character(d$time))
+  }
+
+  d %>%
+    dplyr::mutate(
+      positive_cut = dplyr::if_else(!is.na(.data$cq) & .data$cq > 39, 0L, as.integer(.data$positive)),
+      time_cat = factor(as.character(.data$time), levels = levels(.data$time), ordered = FALSE)
+    )
+}
+
+df.6.reads <- wrangle_exp6_reads_sheet("analysis/data/GVB_exp6_reads_tom.xlsx")
+df.6.reads.no0 <- wrangle_exp6_reads_sheet("analysis/data/GVB_exp6_reads_tom_no_time0.xlsx")
 ```
 
 <details><summary>Data frames</summary>
 
 ```{r exp6-summary-tibbles, echo=FALSE}
+cat("Original time-course (Exp6-time2.xlsx)\n\n")
 print(df.6 %>% group_by(sample, time) %>% tally())
-print(df.6.d %>% group_by(sample, number) %>% tally())
 str(df.6)
+
+cat("\n\nOriginal density design (2 h / 24 h number sheets)\n\n")
+print(df.6.d %>% group_by(sample, number) %>% tally())
 str(df.6.d)
+
+cat("\n\nReads — full (GVB_exp6_reads_tom.xlsx)\n\n")
+print(df.6.reads %>% group_by(sample, time) %>% tally())
+str(df.6.reads)
+
+cat("\n\nReads — no time 0 (GVB_exp6_reads_tom_no_time0.xlsx)\n\n")
+print(df.6.reads.no0 %>% group_by(sample, time) %>% tally())
+str(df.6.reads.no0)
 ```
 
 </details>
@@ -166,9 +265,95 @@ mod.4 <- brm(
   backend = "cmdstanr", silent = 0, refresh = 1000,
   chains = 4, cores = 4, warmup = 2000, iter = 4000
 )
+
+# Factor time (same mean structure; time as categorical, not monotonic)
+mod_formula <- bf(positive ~ time_cat + (1|sample_id))
+
+mod.1b <- brm(
+  mod_formula, family = bernoulli(link = "logit"),
+  prior = priors,
+  data = df.6,
+  file = paste0(here::here("outputs/models/mod.1b.Rmd")),
+  threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+  control = list(step_size = 0.01, adapt_delta = 0.99),
+  backend = "cmdstanr", silent = 0, refresh = 1000,
+  chains = 4, cores = 4, warmup = 2000, iter = 4000
+)
+
+mod_formula <- bf(positive_cut ~ time_cat + (1|sample_id))
+
+mod.2b <- brm(
+  mod_formula, family = bernoulli(link = "logit"),
+  prior = priors,
+  data = df.6,
+  file = paste0(here::here("outputs/models/mod.2b.Rmd")),
+  threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+  control = list(step_size = 0.01, adapt_delta = 0.99),
+  backend = "cmdstanr", silent = 0, refresh = 1000,
+  chains = 4, cores = 4, warmup = 2000, iter = 4000
+)
+
+mod_formula <- bf(positive ~ time_cat * mo(number) + (1|sample_id))
+
+mod.3b <- brm(
+  mod_formula, family = bernoulli(link = "logit"),
+  prior = priors,
+  data = df.6.d,
+  file = paste0(here::here("outputs/models/mod.3b.Rmd")),
+  threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+  control = list(step_size = 0.01, adapt_delta = 0.99),
+  backend = "cmdstanr", silent = 0, refresh = 1000,
+  chains = 4, cores = 4, warmup = 2000, iter = 4000
+)
+
+mod_formula <- bf(positive_cut ~ time_cat * mo(number) + (1|sample_id))
+
+mod.4b <- brm(
+  mod_formula, family = bernoulli(link = "logit"),
+  prior = priors,
+  data = df.6.d,
+  file = paste0(here::here("outputs/models/mod.4b.Rmd")),
+  threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+  control = list(step_size = 0.01, adapt_delta = 0.99),
+  backend = "cmdstanr", silent = 0, refresh = 1000,
+  chains = 4, cores = 4, warmup = 2000, iter = 4000
+)
 ```
 
-## Effect plots
+```{r exp6-waic-compute, include=FALSE}
+waic_tbl_one_exp <- function(m, model_name) {
+  w <- brms::waic(m)
+  est <- w$estimates
+  rn <- rownames(est)
+  waic_row <- if ("waic" %in% rn) "waic" else if ("WAIC" %in% rn) "WAIC" else rn[1]
+  tibble::tibble(
+    Model = model_name,
+    WAIC = as.numeric(est[waic_row, "Estimate"]),
+    SE = as.numeric(est[waic_row, "SE"])
+  )
+}
+
+exp6_waic_tbl <- dplyr::bind_rows(
+  waic_tbl_one_exp(mod.1, "mod.1 (time monotonic, no cut)"),
+  waic_tbl_one_exp(mod.1b, "mod.1b (time factor, no cut)"),
+  waic_tbl_one_exp(mod.2, "mod.2 (time monotonic, cut)"),
+  waic_tbl_one_exp(mod.2b, "mod.2b (time factor, cut)"),
+  waic_tbl_one_exp(mod.3, "mod.3 (time monot. × number, no cut)"),
+  waic_tbl_one_exp(mod.3b, "mod.3b (time factor × number, no cut)"),
+  waic_tbl_one_exp(mod.4, "mod.4 (time monot. × number, cut)"),
+  waic_tbl_one_exp(mod.4b, "mod.4b (time factor × number, cut)")
+) %>%
+  dplyr::arrange(WAIC, Model) %>%
+  dplyr::mutate(delta_WAIC = WAIC - min(WAIC, na.rm = TRUE)) %>%
+  dplyr::mutate(
+    WAIC = round(WAIC, 2),
+    SE = round(SE, 2),
+    delta_WAIC = round(delta_WAIC, 2)
+  ) %>%
+  dplyr::select(Model, WAIC, SE, delta_WAIC)
+```
+
+## Effect plots (monotonic time)
 
 ```{r exp6-eff1, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4, out.width='100%', dpi = 600}
 # Custom conditional effect plots
@@ -176,7 +361,22 @@ c_eff_1 <- conditional_effects(mod.1)[[1]] %>% mutate(cutoff = "No")
 c_eff_2 <- conditional_effects(mod.2)[[1]] %>% mutate(cutoff = "Yes") %>% rename(positive = positive_cut)
 c_eff <- rbind(c_eff_1, c_eff_2)
 
+raw_exp6_eff1 <- dplyr::bind_rows(
+  dplyr::mutate(df.6, cutoff = factor("No", levels = c("No", "Yes")), y = positive),
+  dplyr::mutate(df.6, cutoff = factor("Yes", levels = c("No", "Yes")), y = positive_cut)
+)
+
 p_exp6_eff1 <- c_eff %>% ggplot(aes(x = time, y = estimate__, ymin = lower__, ymax = upper__, color = cutoff)) +
+  geom_jitter(
+    data = raw_exp6_eff1,
+    aes(x = time, y = y, group = cutoff),
+    inherit.aes = FALSE,
+    position = position_jitterdodge(jitter.width = 0.12, jitter.height = 0.04, dodge.width = -0.5),
+    alpha = 0.35,
+    size = 0.85,
+    color = "black",
+    stroke = 0
+  ) +
   geom_errorbar(position = position_dodge(width = -0.5), width = 0.3, size = 1) +
   geom_point(position = position_dodge(width = -0.5), size = 3, alpha = 0.5) +
   theme_bw() +
@@ -200,7 +400,7 @@ ggplot2::ggsave(
 p_exp6_eff1
 ```
 
-Figure 1: Conditional effect plot of GBV exposure on the probability of detection with (yes = green) and without (no = blue) a Cq cut off of 39. Error bars represent 95% credible intervals with points representing the mean estimate.
+Figure 1: Experiment 6, **monotonic time** (`mo(time)`). Conditional effect plot of GBV exposure on the probability of detection with (yes = green) and without (no = blue) a Cq cut off of 39. Black jittered points are raw binary outcomes by exposure time; error bars are 95% credible intervals and coloured points are posterior means.
 
 ```{r exp6-eff2, warning=FALSE, echo=FALSE, fig.width=7, fig.height=5, out.width='100%', dpi = 600}
 c_eff_3 <- conditional_effects(mod.3, effect = "time:number")[[1]] %>% mutate(cutoff = "No")
@@ -212,7 +412,34 @@ c_eff <- rbind(c_eff_3, c_eff_4) %>%
 
 c_eff$cutoff <- factor(c_eff$cutoff, levels = c("Yes", "No"))
 
+raw_exp6_eff2 <- df.6.d %>%
+  dplyr::mutate(
+    time = paste0("Time: ", .data$time, " hrs"),
+    number = paste0(.data$number, " GVB")
+  ) %>%
+  tidyr::pivot_longer(
+    cols = c(positive, positive_cut),
+    names_to = "which_y",
+    values_to = "y"
+  ) %>%
+  dplyr::mutate(
+    cutoff = factor(
+      dplyr::if_else(.data$which_y == "positive", "No", "Yes"),
+      levels = c("Yes", "No")
+    )
+  )
+
 p_exp6_eff2 <- c_eff %>% ggplot(aes(x = cutoff, y = estimate__, ymin = lower__, ymax = upper__, color = cutoff)) +
+  geom_jitter(
+    data = raw_exp6_eff2,
+    aes(x = cutoff, y = y),
+    inherit.aes = FALSE,
+    position = position_jitter(width = 0.15, height = 0.04),
+    alpha = 0.35,
+    size = 0.85,
+    color = "black",
+    stroke = 0
+  ) +
   geom_errorbar(position = position_dodge(width = 0.5), width = 0.3, size = 1) +
   geom_point(position = position_dodge(width = 0.5), size = 3, alpha = 0.5) +
   theme_bw() +
@@ -237,7 +464,129 @@ ggplot2::ggsave(
 p_exp6_eff2
 ```
 
-Figure 2: Conditional effect plot of GBV exposure on probability of detection faceted by time and number of GVB with (yes = green) and without (no = blue) a Cq cut off of 39. Error bars represent 95% credible intervals with points representing the mean estimate.
+Figure 2: Experiment 6, **monotonic time**. Conditional effect plot of GBV exposure on probability of detection faceted by time and number of GVB with (yes = green) and without (no = blue) a Cq cut off of 39. Black jittered points are raw outcomes; error bars are 95% credible intervals and coloured points are posterior means.
+
+## Effect plots (factor time)
+
+```{r exp6-eff1-fct, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4, out.width='100%', dpi = 600}
+c_eff_1b <- conditional_effects(mod.1b)[[1]] %>% mutate(cutoff = "No")
+c_eff_2b <- conditional_effects(mod.2b)[[1]] %>% mutate(cutoff = "Yes") %>% rename(positive = positive_cut)
+c_eff <- rbind(c_eff_1b, c_eff_2b)
+
+raw_exp6_eff1b <- dplyr::bind_rows(
+  dplyr::mutate(df.6, cutoff = factor("No", levels = c("No", "Yes")), y = positive),
+  dplyr::mutate(df.6, cutoff = factor("Yes", levels = c("No", "Yes")), y = positive_cut)
+)
+
+p_exp6_eff1b <- c_eff %>% ggplot(aes(x = time_cat, y = estimate__, ymin = lower__, ymax = upper__, color = cutoff)) +
+  geom_jitter(
+    data = raw_exp6_eff1b,
+    aes(x = time_cat, y = y, group = cutoff),
+    inherit.aes = FALSE,
+    position = position_jitterdodge(jitter.width = 0.12, jitter.height = 0.04, dodge.width = -0.5),
+    alpha = 0.35,
+    size = 0.85,
+    color = "black",
+    stroke = 0
+  ) +
+  geom_errorbar(position = position_dodge(width = -0.5), width = 0.3, size = 1) +
+  geom_point(position = position_dodge(width = -0.5), size = 3, alpha = 0.5) +
+  theme_bw() +
+  scale_y_continuous(
+    labels = scales::percent,
+    limits = c(0, 1),
+    expand = ggplot2::expansion(mult = c(0.02, 0.02))
+  ) +
+  scale_color_manual(values = c("darkblue", "darkgreen")) +
+  labs(x = "GVB exposure (hrs)", y = "Probability of detection (%)") +
+  guides(color = guide_legend(title = "Cq cut off (> 39)", reverse = TRUE))
+
+ggplot2::ggsave(
+  filename = here::here("outputs/plots", "exp6_effect_1_factor_time.png"),
+  plot = p_exp6_eff1b,
+  width = knitr::opts_current$get("fig.width"),
+  height = knitr::opts_current$get("fig.height"),
+  dpi = 600
+)
+
+p_exp6_eff1b
+```
+
+Figure 1b: Experiment 6, **factor time** (`time_cat`). Same layout as Figure 1; black jittered points are raw outcomes.
+
+```{r exp6-eff2-fct, warning=FALSE, echo=FALSE, fig.width=7, fig.height=5, out.width='100%', dpi = 600}
+c_eff_3b <- conditional_effects(mod.3b, effect = "time_cat:number")[[1]] %>% mutate(cutoff = "No")
+c_eff_4b <- conditional_effects(mod.4b, effect = "time_cat:number")[[1]] %>% mutate(cutoff = "Yes") %>% rename(positive = positive_cut)
+
+c_eff <- rbind(c_eff_3b, c_eff_4b) %>%
+  mutate(time = paste0("Time: ", time_cat, " hrs")) %>%
+  mutate(number = paste0(number, " GVB"))
+
+c_eff$cutoff <- factor(c_eff$cutoff, levels = c("Yes", "No"))
+
+raw_exp6_eff2b <- df.6.d %>%
+  dplyr::mutate(
+    time = paste0("Time: ", .data$time_cat, " hrs"),
+    number = paste0(.data$number, " GVB")
+  ) %>%
+  tidyr::pivot_longer(
+    cols = c(positive, positive_cut),
+    names_to = "which_y",
+    values_to = "y"
+  ) %>%
+  dplyr::mutate(
+    cutoff = factor(
+      dplyr::if_else(.data$which_y == "positive", "No", "Yes"),
+      levels = c("Yes", "No")
+    )
+  )
+
+p_exp6_eff2b <- c_eff %>% ggplot(aes(x = cutoff, y = estimate__, ymin = lower__, ymax = upper__, color = cutoff)) +
+  geom_jitter(
+    data = raw_exp6_eff2b,
+    aes(x = cutoff, y = y),
+    inherit.aes = FALSE,
+    position = position_jitter(width = 0.15, height = 0.04),
+    alpha = 0.35,
+    size = 0.85,
+    color = "black",
+    stroke = 0
+  ) +
+  geom_errorbar(position = position_dodge(width = 0.5), width = 0.3, size = 1) +
+  geom_point(position = position_dodge(width = 0.5), size = 3, alpha = 0.5) +
+  theme_bw() +
+  scale_y_continuous(
+    labels = scales::percent,
+    limits = c(0, 1),
+    expand = ggplot2::expansion(mult = c(0.02, 0.02))
+  ) +
+  scale_color_manual(values = c("darkgreen", "darkblue")) +
+  labs(x = "Cq cut off (> 39)", y = "Probability of detection (%)") +
+  guides(color = guide_legend(title = "Cq cut off (> 39)")) +
+  facet_grid(number ~ time)
+
+ggplot2::ggsave(
+  filename = here::here("outputs/plots", "exp6_effect_2_factor_time.png"),
+  plot = p_exp6_eff2b,
+  width = knitr::opts_current$get("fig.width"),
+  height = knitr::opts_current$get("fig.height"),
+  dpi = 600
+)
+
+p_exp6_eff2b
+```
+
+Figure 2b: Experiment 6, **factor time** (`time_cat × number`). Same layout as Figure 2.
+
+## Model comparison
+
+```{r exp6-waic-tab, echo=FALSE}
+knitr::kable(
+  exp6_waic_tbl,
+  caption = "Experiment 6: WAIC (lower is better). Compare monotonic (`mo(time)`) vs factor (`time_cat`) formulations within each response and design.",
+  format = "html"
+)
+```
 
 ## Models
 
@@ -256,6 +605,10 @@ pp_check(mod.1, ndraws = 200, col = 2)
 pp_check(mod.2, ndraws = 200, col = 2)
 pp_check(mod.3, ndraws = 200, col = 2)
 pp_check(mod.4, ndraws = 200, col = 2)
+pp_check(mod.1b, ndraws = 200, col = 2)
+pp_check(mod.2b, ndraws = 200, col = 2)
+pp_check(mod.3b, ndraws = 200, col = 2)
+pp_check(mod.4b, ndraws = 200, col = 2)
 ```
 
 ## Output
@@ -265,6 +618,10 @@ summary(mod.1)
 summary(mod.2)
 summary(mod.3)
 summary(mod.4)
+summary(mod.1b)
+summary(mod.2b)
+summary(mod.3b)
+summary(mod.4b)
 ```
 
 ## Tables
@@ -497,6 +854,197 @@ knitr::kable(
 
 :::
 
+## Experiment 6 — reads (GVB sequence counts)
+
+Negative binomial regression on **`GVB_exp6_reads_tom.xlsx`** (`df.6.reads`): **`gvb_sequence_number ~ mo(time) + mo(quantity_gbv)`** (quantity GVB as an ordered factor for the monotonic term; default **brms** priors).
+
+::: {.panel-tabset}
+
+```{r exp6-reads-models-fit, include=FALSE}
+df_exp6_reads_mod <- df.6.reads %>%
+  dplyr::mutate(
+    gvb_sequence_number = suppressWarnings(as.integer(round(as.numeric(.data$gvb_sequence_number)))),
+    quantity_gbv = as.numeric(.data$quantity_gbv)
+  ) %>%
+  dplyr::filter(
+    !is.na(.data$gvb_sequence_number),
+    !is.na(.data$quantity_gbv),
+    !is.na(.data$time),
+    .data$gvb_sequence_number >= 0L
+  ) %>%
+  dplyr::mutate(
+    quantity_gbv = ordered(
+      .data$quantity_gbv,
+      levels = sort(unique(stats::na.omit(as.numeric(.data$quantity_gbv))))
+    )
+  )
+
+mod_formula <- bf(gvb_sequence_number ~ mo(time) + mo(quantity_gbv))
+
+mod_exp6_reads <- brm(
+  mod_formula,
+  family = negbinomial(),
+  data = df_exp6_reads_mod,
+  file = paste0(here::here("outputs/models/mod_exp6_reads_gvbseq_negbin.Rmd")),
+  threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+  control = list(step_size = 0.01, adapt_delta = 0.99),
+  backend = "cmdstanr",
+  silent = 0,
+  refresh = 1000,
+  chains = 4,
+  cores = 4,
+  warmup = 2000,
+  iter = 4000
+)
+```
+
+## Effect plots
+
+```{r exp6-reads-eff, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4, out.width="100%", dpi=600}
+#| fig-keep: all
+raw <- df_exp6_reads_mod
+exp6_reads_y_breaks <- c(0, 1, 10, 100, 1000, 10000, 100000)
+
+exp6_reads_plot_theme <- ggplot2::theme_bw() +
+  ggplot2::theme(
+    panel.grid.major.y = ggplot2::element_line(colour = "grey75", linewidth = 0.45),
+    panel.grid.minor.y = ggplot2::element_blank(),
+    panel.grid.major.x = ggplot2::element_line(colour = "grey85", linewidth = 0.35)
+  )
+
+ce_time <- conditional_effects(mod_exp6_reads, effects = "time")[[1]] %>%
+  dplyr::arrange(.data$time)
+
+p_exp6_reads_eff_time <- ggplot2::ggplot(
+  ce_time,
+  ggplot2::aes(x = .data$time, y = .data$estimate__, ymin = .data$lower__, ymax = .data$upper__)
+) +
+  ggplot2::geom_jitter(
+    data = raw,
+    ggplot2::aes(x = .data$time, y = .data$gvb_sequence_number),
+    inherit.aes = FALSE,
+    position = ggplot2::position_jitter(width = 0.18, height = 0.35),
+    alpha = 0.35,
+    size = 0.85,
+    color = "black",
+    stroke = 0
+  ) +
+  ggplot2::geom_errorbar(width = 0.3, size = 1, color = "darkblue") +
+  ggplot2::geom_point(size = 3, alpha = 0.5, color = "darkblue") +
+  exp6_reads_plot_theme +
+  ggplot2::scale_y_continuous(
+    trans = scales::log1p_trans(),
+    breaks = exp6_reads_y_breaks,
+    labels = scales::label_number(big.mark = ","),
+    expand = ggplot2::expansion(mult = c(0.02, 0.02))
+  ) +
+  ggplot2::labs(x = "GVB exposure (hrs)", y = "GVB sequence number")
+
+ce_qty <- conditional_effects(mod_exp6_reads, effects = "quantity_gbv")[[1]] %>%
+  dplyr::arrange(suppressWarnings(as.numeric(as.character(.data$quantity_gbv))))
+
+p_exp6_reads_eff_qty <- ggplot2::ggplot(
+  ce_qty,
+  ggplot2::aes(x = .data$quantity_gbv, y = .data$estimate__, ymin = .data$lower__, ymax = .data$upper__)
+) +
+  ggplot2::geom_jitter(
+    data = raw,
+    ggplot2::aes(x = .data$quantity_gbv, y = .data$gvb_sequence_number),
+    inherit.aes = FALSE,
+    position = ggplot2::position_jitter(width = 0.12, height = 0.35),
+    alpha = 0.35,
+    size = 0.85,
+    color = "black",
+    stroke = 0
+  ) +
+  ggplot2::geom_errorbar(width = 0.3, size = 1, color = "darkblue") +
+  ggplot2::geom_point(size = 3, alpha = 0.5, color = "darkblue") +
+  exp6_reads_plot_theme +
+  ggplot2::scale_y_continuous(
+    trans = scales::log1p_trans(),
+    breaks = exp6_reads_y_breaks,
+    labels = scales::label_number(big.mark = ","),
+    expand = ggplot2::expansion(mult = c(0.02, 0.02))
+  ) +
+  ggplot2::labs(x = "Quantity GVB", y = "GVB sequence number")
+
+ggplot2::ggsave(
+  filename = here::here("outputs/plots", "exp6_reads_effect_time.png"),
+  plot = p_exp6_reads_eff_time,
+  width = knitr::opts_current$get("fig.width"),
+  height = knitr::opts_current$get("fig.height"),
+  dpi = 600
+)
+ggplot2::ggsave(
+  filename = here::here("outputs/plots", "exp6_reads_effect_quantity.png"),
+  plot = p_exp6_reads_eff_qty,
+  width = knitr::opts_current$get("fig.width"),
+  height = knitr::opts_current$get("fig.height"),
+  dpi = 600
+)
+
+p_exp6_reads_eff_time
+p_exp6_reads_eff_qty
+```
+
+Black jittered points are observed **GVB sequence numbers**; blue error bars and points are posterior mean and 95% credible intervals from **`conditional_effects()`** (**`mo(time)`** and **`mo(quantity_gbv)`**; other predictors at **brms** defaults). The vertical axis uses a **log(1 + count)** scale (natural log) so zeros remain visible; reference ticks **0, 1, 10, 100, 1,000, 10,000, 100,000**.
+
+## Models
+
+```{r exp6-reads-models-show, ref.label="exp6-reads-models-fit", echo=TRUE, eval=FALSE}
+
+```
+
+## Validation
+
+```{r exp6-reads-pp-check}
+#| echo: false
+#| message: false
+#| fig-show: hold
+#| layout-ncol: 2
+pp_check(mod_exp6_reads)
+```
+
+## Output
+
+```{r exp6-reads-summary, echo=FALSE}
+summary(mod_exp6_reads)
+```
+
+## Tables
+
+```{r exp6-reads-estimates, echo=FALSE}
+ce_exp6_t <- conditional_effects(mod_exp6_reads, effects = "time")[[1]] %>%
+  dplyr::transmute(
+    `Time (hrs)` = time,
+    `Estimate` = round(estimate__, 3),
+    `Lower` = round(lower__, 3),
+    `Upper` = round(upper__, 3)
+  )
+
+ce_exp6_q <- conditional_effects(mod_exp6_reads, effects = "quantity_gbv")[[1]] %>%
+  dplyr::transmute(
+    `Quantity GVB` = quantity_gbv,
+    `Estimate` = round(estimate__, 3),
+    `Lower` = round(lower__, 3),
+    `Upper` = round(upper__, 3)
+  )
+
+knitr::kable(
+  ce_exp6_t,
+  caption = "Experiment 6 reads: conditional effects of time on the negative binomial mean (GVB sequence number).",
+  format = "html"
+)
+
+knitr::kable(
+  ce_exp6_q,
+  caption = "Experiment 6 reads: conditional effects of quantity GVB on the negative binomial mean (GVB sequence number).",
+  format = "html"
+)
+```
+
+:::
+
 ## Experiment 10
 
 ```{r exp10-wrangle, include=FALSE}
@@ -515,7 +1063,10 @@ df.10 <- df.10 %>%
     time == "7d" ~ 168,
     time == "0" ~ 0
   )) %>%
-  mutate(time = ordered(time))
+  mutate(time = ordered(time)) %>%
+  mutate(time_cat = factor(as.character(time), levels = levels(time), ordered = FALSE))
+
+df.10.reads <- wrangle_exp6_reads_sheet("analysis/data/GVB_exp10_reads_tom.xlsx", require_quantity_gbv = FALSE)
 ```
 
 <details><summary>Data frames</summary>
@@ -523,6 +1074,10 @@ df.10 <- df.10 %>%
 ```{r exp10-summary-tibbles, echo=FALSE}
 print(df.10 %>% group_by(sample, time) %>% tally())
 str(df.10)
+
+cat("\n\nReads — GVB_exp10_reads_tom.xlsx\n\n")
+print(df.10.reads %>% group_by(sample, time) %>% tally())
+str(df.10.reads)
 ```
 
 </details>
@@ -557,9 +1112,64 @@ mod.6 <- brm(
   backend = "cmdstanr", silent = 0, refresh = 1000,
   chains = 4, cores = 4, warmup = 2000, iter = 4000
 )
+
+mod_formula <- bf(positive ~ time_cat + (1|sample_id))
+
+mod.5b <- brm(
+  mod_formula, family = bernoulli(link = "logit"),
+  prior = priors,
+  data = df.10,
+  file = paste0(here::here("outputs/models/mod.5b.Rmd")),
+  threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+  control = list(step_size = 0.01, adapt_delta = 0.99),
+  backend = "cmdstanr", silent = 0, refresh = 1000,
+  chains = 4, cores = 4, warmup = 2000, iter = 4000
+)
+
+mod_formula <- bf(positive_cut ~ time_cat + (1|sample_id))
+
+mod.6b <- brm(
+  mod_formula, family = bernoulli(link = "logit"),
+  prior = priors,
+  data = df.10,
+  file = paste0(here::here("outputs/models/mod.6b.Rmd")),
+  threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+  control = list(step_size = 0.01, adapt_delta = 0.99),
+  backend = "cmdstanr", silent = 0, refresh = 1000,
+  chains = 4, cores = 4, warmup = 2000, iter = 4000
+)
 ```
 
-## Effect plots
+```{r exp10-waic-compute, include=FALSE}
+waic_tbl_one_exp10 <- function(m, model_name) {
+  w <- brms::waic(m)
+  est <- w$estimates
+  rn <- rownames(est)
+  waic_row <- if ("waic" %in% rn) "waic" else if ("WAIC" %in% rn) "WAIC" else rn[1]
+  tibble::tibble(
+    Model = model_name,
+    WAIC = as.numeric(est[waic_row, "Estimate"]),
+    SE = as.numeric(est[waic_row, "SE"])
+  )
+}
+
+exp10_waic_tbl <- dplyr::bind_rows(
+  waic_tbl_one_exp10(mod.5, "mod.5 (time monotonic, no cut)"),
+  waic_tbl_one_exp10(mod.5b, "mod.5b (time factor, no cut)"),
+  waic_tbl_one_exp10(mod.6, "mod.6 (time monotonic, cut)"),
+  waic_tbl_one_exp10(mod.6b, "mod.6b (time factor, cut)")
+) %>%
+  dplyr::arrange(WAIC, Model) %>%
+  dplyr::mutate(delta_WAIC = WAIC - min(WAIC, na.rm = TRUE)) %>%
+  dplyr::mutate(
+    WAIC = round(WAIC, 2),
+    SE = round(SE, 2),
+    delta_WAIC = round(delta_WAIC, 2)
+  ) %>%
+  dplyr::select(Model, WAIC, SE, delta_WAIC)
+```
+
+## Effect plots (monotonic time)
 
 ```{r exp10-eff, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4, out.width='100%', dpi = 600}
 # Custom conditional effect plots
@@ -567,7 +1177,22 @@ c_eff_5 <- conditional_effects(mod.5)[[1]] %>% mutate(cutoff = "No")
 c_eff_6 <- conditional_effects(mod.6)[[1]] %>% mutate(cutoff = "Yes") %>% rename(positive = positive_cut)
 c_eff <- rbind(c_eff_5, c_eff_6)
 
+raw_exp10_eff <- dplyr::bind_rows(
+  dplyr::mutate(df.10, cutoff = factor("No", levels = c("No", "Yes")), y = positive),
+  dplyr::mutate(df.10, cutoff = factor("Yes", levels = c("No", "Yes")), y = positive_cut)
+)
+
 p_exp10_eff <- c_eff %>% ggplot(aes(x = time, y = estimate__, ymin = lower__, ymax = upper__, color = cutoff)) +
+  geom_jitter(
+    data = raw_exp10_eff,
+    aes(x = time, y = y, group = cutoff),
+    inherit.aes = FALSE,
+    position = position_jitterdodge(jitter.width = 0.12, jitter.height = 0.04, dodge.width = -0.5),
+    alpha = 0.35,
+    size = 0.85,
+    color = "black",
+    stroke = 0
+  ) +
   geom_errorbar(position = position_dodge(width = -0.5), width = 0.3, size = 1) +
   geom_point(position = position_dodge(width = -0.5), size = 3, alpha = 0.5) +
   theme_bw() +
@@ -591,7 +1216,65 @@ ggplot2::ggsave(
 p_exp10_eff
 ```
 
-Figure 3: Conditional effect plot of GBV exposure on the probability of detection with (yes = green) and without (no = blue) a Cq cut off of 39. Error bars represent 95% credible intervals with points representing the mean estimate.
+Figure 3: Experiment 10, **monotonic time** (`mo(time)`). Conditional effect plot of GBV exposure on the probability of detection with (yes = green) and without (no = blue) a Cq cut off of 39. Black jittered points are raw binary outcomes by exposure time; error bars are 95% credible intervals and coloured points are posterior means.
+
+## Effect plots (factor time)
+
+```{r exp10-eff-fct, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4, out.width='100%', dpi = 600}
+c_eff_5b <- conditional_effects(mod.5b)[[1]] %>% mutate(cutoff = "No")
+c_eff_6b <- conditional_effects(mod.6b)[[1]] %>% mutate(cutoff = "Yes") %>% rename(positive = positive_cut)
+c_eff <- rbind(c_eff_5b, c_eff_6b)
+
+raw_exp10_effb <- dplyr::bind_rows(
+  dplyr::mutate(df.10, cutoff = factor("No", levels = c("No", "Yes")), y = positive),
+  dplyr::mutate(df.10, cutoff = factor("Yes", levels = c("No", "Yes")), y = positive_cut)
+)
+
+p_exp10_effb <- c_eff %>% ggplot(aes(x = time_cat, y = estimate__, ymin = lower__, ymax = upper__, color = cutoff)) +
+  geom_jitter(
+    data = raw_exp10_effb,
+    aes(x = time_cat, y = y, group = cutoff),
+    inherit.aes = FALSE,
+    position = position_jitterdodge(jitter.width = 0.12, jitter.height = 0.04, dodge.width = -0.5),
+    alpha = 0.35,
+    size = 0.85,
+    color = "black",
+    stroke = 0
+  ) +
+  geom_errorbar(position = position_dodge(width = -0.5), width = 0.3, size = 1) +
+  geom_point(position = position_dodge(width = -0.5), size = 3, alpha = 0.5) +
+  theme_bw() +
+  scale_y_continuous(
+    labels = scales::percent,
+    limits = c(0, 1),
+    expand = ggplot2::expansion(mult = c(0.02, 0.02))
+  ) +
+  scale_color_manual(values = c("darkblue", "darkgreen")) +
+  labs(x = "GVB exposure (hrs)", y = "Probability of detection (%)") +
+  guides(color = guide_legend(title = "Cq cut off (> 39)", reverse = TRUE))
+
+ggplot2::ggsave(
+  filename = here::here("outputs/plots", "exp10_effect_1_factor_time.png"),
+  plot = p_exp10_effb,
+  width = knitr::opts_current$get("fig.width"),
+  height = knitr::opts_current$get("fig.height"),
+  dpi = 600
+)
+
+p_exp10_effb
+```
+
+Figure 3b: Experiment 10, **factor time** (`time_cat`). Same layout as Figure 3.
+
+## Model comparison
+
+```{r exp10-waic-tab, echo=FALSE}
+knitr::kable(
+  exp10_waic_tbl,
+  caption = "Experiment 10: WAIC (lower is better). Compare monotonic (`mo(time)`) vs factor (`time_cat`) formulations.",
+  format = "html"
+)
+```
 
 ## Models
 
@@ -608,6 +1291,8 @@ Figure 3: Conditional effect plot of GBV exposure on the probability of detectio
 #| layout-ncol: 2
 pp_check(mod.5, ndraws = 200, col = 2)
 pp_check(mod.6, ndraws = 200, col = 2)
+pp_check(mod.5b, ndraws = 200, col = 2)
+pp_check(mod.6b, ndraws = 200, col = 2)
 ```
 
 ## Output
@@ -615,6 +1300,8 @@ pp_check(mod.6, ndraws = 200, col = 2)
 ```{r exp10-summary, echo=FALSE}
 summary(mod.5)
 summary(mod.6)
+summary(mod.5b)
+summary(mod.6b)
 ```
 
 ## Tables
@@ -719,6 +1406,146 @@ pairwise_time <- dplyr::bind_rows(
 knitr::kable(
   pairwise_time,
   caption = "Pairwise comparisons between time levels (Experiment 10; Tukey-adjusted): response scale (pp)",
+  format = "html"
+)
+```
+
+:::
+
+## Experiment 10 — reads (GVB sequence counts)
+
+Negative binomial regression on **`GVB_exp10_reads_tom.xlsx`** (`df.10.reads`): **`gvb_sequence_number ~ mo(time)`** (no quantity-GVB column in this workbook; default **brms** priors).
+
+::: {.panel-tabset}
+
+```{r exp10-reads-models-fit, include=FALSE}
+df_exp10_reads_mod <- df.10.reads %>%
+  dplyr::mutate(
+    gvb_sequence_number = suppressWarnings(as.integer(round(as.numeric(.data$gvb_sequence_number))))
+  ) %>%
+  dplyr::filter(
+    !is.na(.data$gvb_sequence_number),
+    !is.na(.data$time),
+    .data$gvb_sequence_number >= 0L
+  )
+
+if (length(levels(droplevels(df_exp10_reads_mod$time))) < 2L) {
+  stop(
+    "Experiment 10 reads: mo(time) needs at least two distinct time levels after filtering. Found: ",
+    paste(levels(droplevels(df_exp10_reads_mod$time)), collapse = ", ")
+  )
+}
+
+mod_formula <- bf(gvb_sequence_number ~ mo(time))
+
+# file: brms adds .rds (avoid .Rmd here; threading off — reduces cmdstanr metadata failures on some drives)
+mod_exp10_reads <- brm(
+  mod_formula,
+  family = negbinomial(),
+  data = df_exp10_reads_mod,
+  file = here::here("outputs/models/mod_exp10_reads_time_nb"),
+  control = list(adapt_delta = 0.99, max_treedepth = 12L),
+  backend = "cmdstanr",
+  silent = 0,
+  refresh = 500,
+  chains = 4,
+  cores = 4,
+  warmup = 2000,
+  iter = 4000
+)
+```
+
+## Effect plots
+
+```{r exp10-reads-eff, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4, out.width="100%", dpi=600}
+#| fig-keep: all
+raw <- df_exp10_reads_mod
+exp10_reads_y_breaks <- c(0, 1, 10, 100, 1000, 10000, 100000)
+
+exp10_reads_plot_theme <- ggplot2::theme_bw() +
+  ggplot2::theme(
+    panel.grid.major.y = ggplot2::element_line(colour = "grey75", linewidth = 0.45),
+    panel.grid.minor.y = ggplot2::element_blank(),
+    panel.grid.major.x = ggplot2::element_line(colour = "grey85", linewidth = 0.35)
+  )
+
+ce_time <- conditional_effects(mod_exp10_reads, effects = "time")[[1]] %>%
+  dplyr::arrange(.data$time)
+
+p_exp10_reads_eff_time <- ggplot2::ggplot(
+  ce_time,
+  ggplot2::aes(x = .data$time, y = .data$estimate__, ymin = .data$lower__, ymax = .data$upper__)
+) +
+  ggplot2::geom_jitter(
+    data = raw,
+    ggplot2::aes(x = .data$time, y = .data$gvb_sequence_number),
+    inherit.aes = FALSE,
+    position = ggplot2::position_jitter(width = 0.18, height = 0.35),
+    alpha = 0.35,
+    size = 0.85,
+    color = "black",
+    stroke = 0
+  ) +
+  ggplot2::geom_errorbar(width = 0.3, size = 1, color = "darkblue") +
+  ggplot2::geom_point(size = 3, alpha = 0.5, color = "darkblue") +
+  exp10_reads_plot_theme +
+  ggplot2::scale_y_continuous(
+    trans = scales::log1p_trans(),
+    breaks = exp10_reads_y_breaks,
+    labels = scales::label_number(big.mark = ","),
+    expand = ggplot2::expansion(mult = c(0.02, 0.02))
+  ) +
+  ggplot2::labs(x = "GVB exposure (hrs)", y = "GVB sequence number")
+
+ggplot2::ggsave(
+  filename = here::here("outputs/plots", "exp10_reads_effect_time.png"),
+  plot = p_exp10_reads_eff_time,
+  width = knitr::opts_current$get("fig.width"),
+  height = knitr::opts_current$get("fig.height"),
+  dpi = 600
+)
+
+p_exp10_reads_eff_time
+```
+
+Black jittered points are observed **GVB sequence numbers**; blue error bars and points are posterior mean and 95% credible intervals from **`conditional_effects()`** for **`mo(time)`** only. The vertical axis uses a **log(1 + count)** scale with ticks at **0, 1, 10, 100, 1,000, 10,000, 100,000**.
+
+## Models
+
+```{r exp10-reads-models-show, ref.label="exp10-reads-models-fit", echo=TRUE, eval=FALSE}
+
+```
+
+## Validation
+
+```{r exp10-reads-pp-check}
+#| echo: false
+#| message: false
+#| fig-show: hold
+#| layout-ncol: 2
+pp_check(mod_exp10_reads)
+```
+
+## Output
+
+```{r exp10-reads-summary, echo=FALSE}
+summary(mod_exp10_reads)
+```
+
+## Tables
+
+```{r exp10-reads-estimates, echo=FALSE}
+ce_exp10_t <- conditional_effects(mod_exp10_reads, effects = "time")[[1]] %>%
+  dplyr::transmute(
+    `Time (hrs)` = time,
+    `Estimate` = round(estimate__, 3),
+    `Lower` = round(lower__, 3),
+    `Upper` = round(upper__, 3)
+  )
+
+knitr::kable(
+  ce_exp10_t,
+  caption = "Experiment 10 reads: conditional effects of time on the negative binomial mean (GVB sequence number).",
   format = "html"
 )
 ```
@@ -1123,7 +1950,9 @@ qpcr_plot_week_by_submethod <- function(fit) {
     ggplot2::theme_classic() +
     ggplot2::theme(
       strip.text = ggplot2::element_text(size = 9),
-      legend.position = "none"
+      legend.position = "none",
+      panel.grid.major.x = ggplot2::element_line(colour = "grey85", linewidth = 0.3),
+      panel.grid.major.y = ggplot2::element_line(colour = "grey85", linewidth = 0.3)
     ) +
     ggplot2::scale_y_continuous(
       labels = scales::percent,
@@ -1191,39 +2020,9 @@ qpcr_model_formula_lines <- c(
 
 ## Effect plots
 
-Side-by-side tabs for **`mod_10`** and **`mod_8`**. Each tab shows **week × sub-method** (`posterior_epred` on a full week × sub-method grid: median PVH per sub-method, reference replicate, `re_formula = NA`) and **PVH number × sub-method** (`conditional_effects`; other predictors at **brms** defaults). Figures are written to `outputs/plots/` as `qpcr_effect_mod10_*` and `qpcr_effect_mod8_*`.
+Side-by-side tabs for **`mod_8`** and **`mod_10`**. Each tab shows **week × sub-method** (`posterior_epred` on a full week × sub-method grid: median PVH per sub-method, reference replicate, `re_formula = NA`) and **PVH number × sub-method** (`conditional_effects`; other predictors at **brms** defaults). Figures are written to `outputs/plots/` as `qpcr_effect_mod8_*` and `qpcr_effect_mod10_*`.
 
 ::: {.panel-tabset}
-
-## Effect plots (mod 10)
-
-```{r qpcr-effect-mod10, echo=FALSE, results="asis", fig.width=9, fig.height=6, out.width="100%", dpi=600}
-#| fig-keep: all
-fit <- mod_10
-gw <- knitr::opts_current$get("fig.width")
-gh <- knitr::opts_current$get("fig.height")
-cat("```r\n", qpcr_model_formula_lines[["10"]], "\n```\n\n", sep = "")
-cat("**Week × sub-method**\n\n")
-pw <- qpcr_plot_week_by_submethod(fit)
-ggplot2::ggsave(
-  filename = here::here("outputs/plots", "qpcr_effect_mod10_week.png"),
-  plot = pw,
-  width = gw,
-  height = gh,
-  dpi = 600
-)
-print(pw)
-cat("\n**PVH number × sub-method**\n\n")
-pp <- qpcr_plot_pvh_by_submethod(fit)
-ggplot2::ggsave(
-  filename = here::here("outputs/plots", "qpcr_effect_mod10_pvh.png"),
-  plot = pp,
-  width = gw,
-  height = gh,
-  dpi = 600
-)
-print(pp)
-```
 
 ## Effect plots (mod 8)
 
@@ -1247,6 +2046,36 @@ cat("\n**PVH number × sub-method**\n\n")
 pp <- qpcr_plot_pvh_by_submethod(fit)
 ggplot2::ggsave(
   filename = here::here("outputs/plots", "qpcr_effect_mod8_pvh.png"),
+  plot = pp,
+  width = gw,
+  height = gh,
+  dpi = 600
+)
+print(pp)
+```
+
+## Effect plots (mod 10)
+
+```{r qpcr-effect-mod10, echo=FALSE, results="asis", fig.width=9, fig.height=6, out.width="100%", dpi=600}
+#| fig-keep: all
+fit <- mod_10
+gw <- knitr::opts_current$get("fig.width")
+gh <- knitr::opts_current$get("fig.height")
+cat("```r\n", qpcr_model_formula_lines[["10"]], "\n```\n\n", sep = "")
+cat("**Week × sub-method**\n\n")
+pw <- qpcr_plot_week_by_submethod(fit)
+ggplot2::ggsave(
+  filename = here::here("outputs/plots", "qpcr_effect_mod10_week.png"),
+  plot = pw,
+  width = gw,
+  height = gh,
+  dpi = 600
+)
+print(pw)
+cat("\n**PVH number × sub-method**\n\n")
+pp <- qpcr_plot_pvh_by_submethod(fit)
+ggplot2::ggsave(
+  filename = here::here("outputs/plots", "qpcr_effect_mod10_pvh.png"),
   plot = pp,
   width = gw,
   height = gh,
