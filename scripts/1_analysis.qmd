@@ -14,7 +14,106 @@ format:
           font-size: 0.88rem;
           font-weight: normal;
         }
+        /* Model summary blocks (brms `summary()`): smaller type, horizontal scroll, no soft wrap */
+        :root {
+          --model-summary-font-rem: 0.72;
+        }
+        .model-output-panel {
+          overflow-x: auto;
+          overflow-y: hidden;
+          max-width: 100%;
+          margin: 0.35rem 0 0.9rem;
+          padding: 0.45rem 0.55rem;
+          border: 1px solid rgba(0, 0, 0, 0.12);
+          border-radius: 4px;
+          background: rgba(0, 0, 0, 0.02);
+          -webkit-overflow-scrolling: touch;
+        }
+        .model-output-panel pre,
+        .model-output-panel .ansi,
+        .model-output-panel code {
+          font-size: calc(var(--model-summary-font-rem) * 1rem) !important;
+          line-height: 1.28;
+          white-space: pre !important;
+          word-break: normal !important;
+          overflow-wrap: normal !important;
+          margin: 0;
+        }
+        #model-output-global-toolbar {
+          position: fixed;
+          right: max(12px, env(safe-area-inset-right));
+          bottom: max(12px, env(safe-area-inset-bottom));
+          z-index: 1080;
+          display: none;
+          align-items: center;
+          gap: 0.45rem;
+          padding: 0.35rem 0.65rem;
+          font-size: 0.78rem;
+          line-height: 1.2;
+          background: var(--bs-body-bg, #fff);
+          color: var(--bs-body-color, #333);
+          border: 1px solid rgba(0, 0, 0, 0.15);
+          border-radius: 6px;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+          max-width: calc(100vw - 24px);
+        }
+        #model-output-global-toolbar.visible {
+          display: flex;
+        }
+        #model-output-global-toolbar label {
+          margin: 0;
+          white-space: nowrap;
+        }
+        #model-output-global-toolbar input[type="range"] {
+          width: min(140px, 35vw);
+        }
         </style>
+        <script>
+        (function () {
+          var root = document.documentElement;
+          var debounceTimer = null;
+          function debounced(fn, ms) {
+            return function () {
+              clearTimeout(debounceTimer);
+              debounceTimer = setTimeout(fn, ms);
+            };
+          }
+          function ensureToolbar() {
+            var panels = document.querySelectorAll(".model-output-panel");
+            var tb = document.getElementById("model-output-global-toolbar");
+            var slider = document.getElementById("summary-font-size-slider");
+            if (!tb || !slider) return;
+            if (panels.length) {
+              tb.classList.add("visible");
+              root.style.setProperty("--model-summary-font-rem", slider.value);
+            } else {
+              tb.classList.remove("visible");
+            }
+          }
+          function initModelSummaryToolbar() {
+            var tb = document.getElementById("model-output-global-toolbar");
+            var slider;
+            if (!tb) {
+              tb = document.createElement("div");
+              tb.id = "model-output-global-toolbar";
+              tb.innerHTML =
+                '<label for="summary-font-size-slider">Output font size</label>' +
+                '<input type="range" id="summary-font-size-slider" min="0.55" max="1" step="0.03" value="0.72" ' +
+                'aria-label="Adjust output font size" title="Font size for printed model output (brms summary)"/>';
+              document.body.appendChild(tb);
+              slider = tb.querySelector("#summary-font-size-slider");
+              slider.addEventListener("input", function () {
+                root.style.setProperty("--model-summary-font-rem", slider.value);
+              });
+            }
+            ensureToolbar();
+            var mo = new MutationObserver(debounced(ensureToolbar, 80));
+            mo.observe(document.body, { childList: true, subtree: true });
+            document.addEventListener("shown.bs.tab", ensureToolbar);
+          }
+          document.addEventListener("DOMContentLoaded", initModelSummaryToolbar);
+        })();
+        </script>
     df-print: paged
     code-fold: false
     toc: true
@@ -43,7 +142,7 @@ ipak <- function(pkg) {
 }
 
 packages <- c(
-  "tidyverse", "readxl", "janitor", "here", "reshape2", "brms", "cmdstanr", "bayesplot", "scales", "knitr"
+  "tidyverse", "readxl", "janitor", "here", "reshape2", "brms", "cmdstanr", "bayesplot", "scales", "knitr", "patchwork"
 )
 
 ipak(packages)
@@ -95,7 +194,7 @@ cmdstanr::set_cmdstan_path("/powerplant/workspace/hrltxm/workbench-k8s/stan/vani
 
 To compare the probability of detection (%) of GVB at different exposure levels (0, 2, 6, 16, 24, 48 hrs), with and without a Cq cut off (i.e., if a Cq value was greater than 39 then classify as no detection), and GVB density (where data was available: at 2hr and 24hrs), generalized linear mixed effect (GLMM) models were performed in R (R Core Team 2022) using the brms package (Bürkner, 2017).
 
-For all models a Bernoulli distribution was selected with a logit link function to model the binary detection response (yes = 1, no = 0). The fixed effects of time and number of GBV were treated as monotonic predictors since they are ordered categories. An interaction term was included between time and number of GVB when this information was available. A random effect of sample was used for all models since measures were collected in triplicates. A weakly informative prior was used for the fixed effects to aid convergence (normal distribution with a mean of 0 and standard deviation of 1.5).
+For all models a Bernoulli distribution was selected with a logit link function to model the binary detection response (yes = 1, no = 0). The fixed effects of time and number of GBV were treated as monotonic predictors since they are ordered categories. Where both were available (density design at 2 h and 24 h), they were modeled additively as `mo(time) + mo(number)` (no interaction). A random effect of sample was used for all models since measures were collected in triplicates.
 
 Model validation was performed using prior and posterior predictive checks, as well as effective samples sizes and r-hats (McElreath, 2020).
 
@@ -141,8 +240,19 @@ wrangle_exp6_reads_sheet <- function(
   d <- read_excel(path, sheet = 1) %>% clean_names()
   d <- dplyr::select(d, -dplyr::any_of("exp"))
 
-  if (!"time" %in% names(d) && "exposure_time_hours" %in% names(d)) {
-    d <- dplyr::rename(d, time = exposure_time_hours)
+  # If the sheet has "Exposure time (hours)" and also another `time` column (e.g. replicate index),
+  # always take the exposure column as the experimental factor.
+  if ("exposure_time_hours" %in% names(d)) {
+    d <- dplyr::mutate(d, time = .data$exposure_time_hours) %>%
+      dplyr::select(-dplyr::all_of("exposure_time_hours"))
+  } else if (!"time" %in% names(d)) {
+    et_alias <- intersect(
+      c("exposure_time_h", "exposure_time", "exposure_h", "time_exposure"),
+      names(d)
+    )
+    if (length(et_alias)) {
+      d <- dplyr::rename(d, time = dplyr::all_of(et_alias[[1]]))
+    }
   }
   if (!"positive" %in% names(d) && "q_pcr_pos" %in% names(d)) {
     d <- dplyr::rename(d, positive = q_pcr_pos)
@@ -205,6 +315,27 @@ wrangle_exp6_reads_sheet <- function(
     d$total_reads <- suppressWarnings(as.numeric(d$total_reads))
   }
 
+  if (!"gvb_sequence_number" %in% names(d)) {
+    gvb_alias <- intersect(
+      c("gvb_sequence_number", "gbv_sequence_number", "gvb_seq_number", "gbv_seq_n"),
+      names(d)
+    )
+    if (length(gvb_alias)) {
+      d <- dplyr::rename(d, gvb_sequence_number = dplyr::all_of(gvb_alias[[1]]))
+    }
+  }
+  if (!"gvb_sequence_number" %in% names(d)) {
+    nms <- names(d)
+    cand <- nms[
+      grepl("sequence", nms, ignore.case = TRUE) &
+        grepl("gvb|gbv", nms, ignore.case = TRUE) &
+        !grepl("quantity|quant|quani", nms, ignore.case = TRUE)
+    ]
+    if (length(cand) == 1L) {
+      d <- dplyr::rename(d, gvb_sequence_number = dplyr::all_of(cand))
+    }
+  }
+
   miss <- setdiff(c("time", "cq", "positive", "sample"), names(d))
   if (length(miss)) {
     stop(
@@ -233,6 +364,9 @@ wrangle_exp6_reads_sheet <- function(
     d[[cl]] <- as.factor(d[[cl]])
   }
 
+  # Preserve raw exposure text for `exp10_time_to_hours()` (ordered `time` can obscure cell text).
+  exposure_label <- stringr::str_trim(as.character(d$time))
+
   tnum <- suppressWarnings(as.numeric(d$time))
   if (!all(is.na(tnum))) {
     tlv <- sort(unique(tnum[!is.na(tnum)]))
@@ -240,6 +374,8 @@ wrangle_exp6_reads_sheet <- function(
   } else {
     d$time <- ordered(as.character(d$time))
   }
+
+  d$exposure_label <- exposure_label
 
   d %>%
     dplyr::mutate(
@@ -272,6 +408,7 @@ exp6_reads_fig_y_max_filtered <- function(dr) {
       !is.na(.data$gvb_sequence_number),
       !is.na(.data$quantity_gbv),
       .data$quantity_gbv != 0,
+      suppressWarnings(as.numeric(as.character(.data$time))) != 0,
       suppressWarnings(as.numeric(as.character(.data$time))) %in% c(2, 24)
     ) %>%
     dplyr::summarise(mx = max(c(0L, .data$gvb_sequence_number), na.rm = TRUE), .groups = "drop") %>%
@@ -289,6 +426,8 @@ exp6_reads_y_labels <- function(x) ifelse(x == 0, "0", scales::label_number(big.
 # Numeric x for 2 h / 24 h (1 and 2) so raw jitter can sit slightly right of estimates; axis still labelled in hours.
 exp6_reads_fig_x_nudge_raw <- 0.1
 exp6_reads_fig_xlim <- c(0.45, 2.72)
+exp6_reads_xlim_for_n <- function(n) c(0.45, n + 0.27)
+exp6_reads_qty_dodge_w <- 0.85 * 0.75
 # Figure 3 only: small negative floor (log1p domain x > -1) so means/CIs near zero are not clipped.
 exp6_reads_fig_y_lower_f3 <- -0.18
 exp6_reads_fig_legend_npc <- c(
@@ -332,13 +471,10 @@ brief_dataframe(df.6.reads.no0)
 ```{r exp6-models-fit, include=FALSE}
 mod_formula <- bf(positive ~ mo(time) + (1|sample_id))
 
-priors <- prior(normal(0,1.5), class = b)
-
-mod.1 <- brm(
+mod_1 <- brm(
   mod_formula, family = bernoulli(link = "logit"),
-  prior = priors,
   data = df.6,
-  file = paste0(here::here("outputs/models/mod.1.Rmd")),
+  file = here::here("outputs/models", "mod_1"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   control = list(step_size = 0.01, adapt_delta = 0.99),
   backend = "cmdstanr", silent = 0, refresh = 1000,
@@ -347,37 +483,34 @@ mod.1 <- brm(
 
 mod_formula <- bf(positive_cut ~ mo(time) + (1|sample_id))
 
-mod.2 <- brm(
+mod_2 <- brm(
   mod_formula, family = bernoulli(link = "logit"),
-  prior = priors,
   data = df.6,
-  file = paste0(here::here("outputs/models/mod.2.Rmd")),
+  file = here::here("outputs/models", "mod_2"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   control = list(step_size = 0.01, adapt_delta = 0.99),
   backend = "cmdstanr", silent = 0, refresh = 1000,
   chains = 4, cores = 4, warmup = 2000, iter = 4000
 )
 
-mod_formula <- bf(positive ~ mo(time) * mo(number) + (1|sample_id))
+mod_formula <- bf(positive ~ mo(time) + mo(number) + (1|sample_id))
 
-mod.3 <- brm(
+mod_3 <- brm(
   mod_formula, family = bernoulli(link = "logit"),
-  prior = priors,
   data = df.6.d,
-  file = paste0(here::here("outputs/models/mod.3.Rmd")),
+  file = here::here("outputs/models", "mod_3"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   control = list(step_size = 0.01, adapt_delta = 0.99),
   backend = "cmdstanr", silent = 0, refresh = 1000,
   chains = 4, cores = 4, warmup = 2000, iter = 4000
 )
 
-mod_formula <- bf(positive_cut ~ mo(time) * mo(number) + (1|sample_id))
+mod_formula <- bf(positive_cut ~ mo(time) + mo(number) + (1|sample_id))
 
-mod.4 <- brm(
+mod_4 <- brm(
   mod_formula, family = bernoulli(link = "logit"),
-  prior = priors,
   data = df.6.d,
-  file = paste0(here::here("outputs/models/mod.4.Rmd")),
+  file = here::here("outputs/models", "mod_4"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   control = list(step_size = 0.01, adapt_delta = 0.99),
   backend = "cmdstanr", silent = 0, refresh = 1000,
@@ -399,10 +532,10 @@ waic_tbl_one_exp <- function(m, model_name) {
 }
 
 exp6_waic_tbl <- dplyr::bind_rows(
-  waic_tbl_one_exp(mod.1, "mod.1 (time monotonic, no cut)"),
-  waic_tbl_one_exp(mod.2, "mod.2 (time monotonic, cut)"),
-  waic_tbl_one_exp(mod.3, "mod.3 (time monot. × number, no cut)"),
-  waic_tbl_one_exp(mod.4, "mod.4 (time monot. × number, cut)")
+  waic_tbl_one_exp(mod_1, "mod_1 (time monotonic, no cut)"),
+  waic_tbl_one_exp(mod_2, "mod_2 (time monotonic, cut)"),
+  waic_tbl_one_exp(mod_3, "mod_3 (time + number additive, no cut)"),
+  waic_tbl_one_exp(mod_4, "mod_4 (time + number additive, cut)")
 ) %>%
   dplyr::arrange(WAIC, Model) %>%
   dplyr::mutate(delta_WAIC = WAIC - min(WAIC, na.rm = TRUE)) %>%
@@ -418,8 +551,8 @@ exp6_waic_tbl <- dplyr::bind_rows(
 
 ```{r exp6-eff1, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4, out.width='100%', dpi = 600}
 # Custom conditional effect plots
-c_eff_1 <- conditional_effects(mod.1)[[1]] %>% mutate(cutoff = "No")
-c_eff_2 <- conditional_effects(mod.2)[[1]] %>% mutate(cutoff = "Yes") %>% rename(positive = positive_cut)
+c_eff_1 <- conditional_effects(mod_1)[[1]] %>% mutate(cutoff = "No")
+c_eff_2 <- conditional_effects(mod_2)[[1]] %>% mutate(cutoff = "Yes") %>% rename(positive = positive_cut)
 c_eff <- rbind(c_eff_1, c_eff_2)
 
 raw_exp6_eff1 <- dplyr::bind_rows(
@@ -468,7 +601,7 @@ p_exp6_eff1 <- c_eff %>% ggplot(aes(x = time, y = estimate__, ymin = lower__, ym
   guides(color = guide_legend(title="Cq cut off (> 39)", reverse = TRUE))
 
 ggplot2::ggsave(
-  filename = here::here("outputs/plots", "exp6_effect_1.png"),
+  filename = here::here("outputs/plots", "figure-01-exp6-detection-mo-time-cutoff.png"),
   plot = p_exp6_eff1,
   width = knitr::opts_current$get("fig.width"),
   height = knitr::opts_current$get("fig.height"),
@@ -478,17 +611,17 @@ ggplot2::ggsave(
 p_exp6_eff1
 ```
 
-Figure 1: Experiment 6, **monotonic time** (`mo(time)`). Conditional effect plot of GBV exposure on the probability of detection with (yes = green) and without (no = blue) a Cq cut off of 39. Jittered points are raw binary outcomes by exposure time, coloured by cutoff; error bars are 95% credible intervals and coloured points are posterior means.
+Figure 1: Conditional effect plot of GBV exposure on the probability of detection with (yes = green) and without (no = blue) a Cq cut off of 39. Jittered points are raw binary outcomes by exposure time, coloured by cutoff; error bars are 95% credible intervals and coloured points are posterior means.
 
 ```{r exp6-eff2, warning=FALSE, echo=FALSE, fig.width=7, fig.height=5, out.width='100%', dpi = 600}
-c_eff_3 <- conditional_effects(mod.3, effect = "time:number")[[1]] %>% mutate(cutoff = "No")
-c_eff_4 <- conditional_effects(mod.4, effect = "time:number")[[1]] %>% mutate(cutoff = "Yes") %>%  rename(positive = positive_cut)
+c_eff_3 <- conditional_effects(mod_3, effects = c("time", "number"))[[1]] %>% mutate(cutoff = "No")
+c_eff_4 <- conditional_effects(mod_4, effects = c("time", "number"))[[1]] %>% mutate(cutoff = "Yes") %>%  rename(positive = positive_cut)
 
 c_eff <- rbind(c_eff_3, c_eff_4) %>%
   mutate(time = paste0("Time: ", time, " hrs")) %>%
   mutate(number = paste0(number, " GVB"))
 
-c_eff$cutoff <- factor(c_eff$cutoff, levels = c("Yes", "No"))
+c_eff$cutoff <- factor(c_eff$cutoff, levels = c("No", "Yes"))
 
 raw_exp6_eff2 <- df.6.d %>%
   dplyr::mutate(
@@ -503,7 +636,7 @@ raw_exp6_eff2 <- df.6.d %>%
   dplyr::mutate(
     cutoff = factor(
       dplyr::if_else(.data$which_y == "positive", "No", "Yes"),
-      levels = c("Yes", "No")
+      levels = c("No", "Yes")
     ),
     y_plot = binary_y_for_plot(.data$y)
   )
@@ -526,10 +659,11 @@ p_exp6_eff2 <- c_eff %>% ggplot(aes(x = cutoff, y = estimate__, ymin = lower__, 
     strip.background.x = element_rect(fill = "white", colour = "grey35", linewidth = 0.5),
     strip.background.y = element_rect(fill = "white", colour = "grey35", linewidth = 0.5),
     panel.background = element_rect(fill = "white", colour = NA),
+    panel.border = element_rect(colour = "grey35", fill = NA, linewidth = 0.6),
     panel.grid.major.x = element_line(colour = "grey85", linewidth = 0.3),
     panel.grid.major.y = element_line(colour = "grey85", linewidth = 0.3)
   ) +
-  scale_color_manual(values = c("darkgreen", "darkblue")) +
+  scale_color_manual(values = c("darkblue", "darkgreen")) +
   labs(x = "Cq cut off (> 39)", y = "Probability of detection (%)") +
   guides(color = "none") +
   facet_grid(number ~ time) +
@@ -541,7 +675,7 @@ p_exp6_eff2 <- c_eff %>% ggplot(aes(x = cutoff, y = estimate__, ymin = lower__, 
   )
 
 ggplot2::ggsave(
-  filename = here::here("outputs/plots", "exp6_effect_2.png"),
+  filename = here::here("outputs/plots", "figure-02-exp6-detection-mo-time-by-time-number.png"),
   plot = p_exp6_eff2,
   width = knitr::opts_current$get("fig.width"),
   height = knitr::opts_current$get("fig.height"),
@@ -551,7 +685,7 @@ ggplot2::ggsave(
 p_exp6_eff2
 ```
 
-Figure 2: Experiment 6, **monotonic time**. Conditional effect plot of GBV exposure on probability of detection faceted by time and number of GVB with (yes = green) and without (no = blue) a Cq cut off of 39. Jittered points are raw outcomes, coloured by cutoff; error bars are 95% credible intervals and coloured points are posterior means.
+Figure 2: Conditional effect plot of GBV exposure on probability of detection, faceted by time and number of GVB, with (yes = green) and without (no = blue) a Cq cut off of 39. Jittered points are raw outcomes, coloured by cutoff; error bars are 95% credible intervals and coloured points are posterior means.
 
 ## Tables
 
@@ -560,7 +694,7 @@ Figure 2: Experiment 6, **monotonic time**. Conditional effect plot of GBV expos
 # Convert to percent for reporting.
 
 ce6_time <- dplyr::bind_rows(
-  conditional_effects(mod.1)[[1]] %>%
+  conditional_effects(mod_1)[[1]] %>%
     mutate(cutoff = "No") %>%
     transmute(
       Cutoff = cutoff,
@@ -569,7 +703,7 @@ ce6_time <- dplyr::bind_rows(
       `Lower (%)` = round(lower__ * 100, 2),
       `Upper (%)` = round(upper__ * 100, 2)
     ),
-  conditional_effects(mod.2)[[1]] %>%
+  conditional_effects(mod_2)[[1]] %>%
     mutate(cutoff = "Yes") %>%
     transmute(
       Cutoff = cutoff,
@@ -582,7 +716,7 @@ ce6_time <- dplyr::bind_rows(
   arrange(Cutoff, `Time (hrs)`)
 
 ce6_time_number <- dplyr::bind_rows(
-  conditional_effects(mod.3, effect = "time:number")[[1]] %>%
+  conditional_effects(mod_3, effects = c("time", "number"))[[1]] %>%
     mutate(cutoff = "No") %>%
     transmute(
       Cutoff = cutoff,
@@ -592,7 +726,7 @@ ce6_time_number <- dplyr::bind_rows(
       `Lower (%)` = round(lower__ * 100, 2),
       `Upper (%)` = round(upper__ * 100, 2)
     ),
-  conditional_effects(mod.4, effect = "time:number")[[1]] %>%
+  conditional_effects(mod_4, effects = c("time", "number"))[[1]] %>%
     mutate(cutoff = "Yes") %>%
     transmute(
       Cutoff = cutoff,
@@ -613,7 +747,7 @@ knitr::kable(
 
 knitr::kable(
   ce6_time_number,
-  caption = "Modeled estimates from conditional effects (Experiment 6): time x number",
+  caption = "Modeled estimates from conditional effects (Experiment 6): time and number (additive)",
   format = "html"
 )
 ```
@@ -641,20 +775,45 @@ knitr::kable(
 #| message: false
 #| fig-show: hold
 #| layout-ncol: 2
-pp_check(mod.1, ndraws = 200, col = 2)
-pp_check(mod.2, ndraws = 200, col = 2)
-pp_check(mod.3, ndraws = 200, col = 2)
-pp_check(mod.4, ndraws = 200, col = 2)
+pp_check(mod_1, ndraws = 200, col = 2)
+pp_check(mod_2, ndraws = 200, col = 2)
+pp_check(mod_3, ndraws = 200, col = 2)
+pp_check(mod_4, ndraws = 200, col = 2)
 ```
 
 ## Output
 
-```{r exp6-summary, echo=FALSE}
-summary(mod.1)
-summary(mod.2)
-summary(mod.3)
-summary(mod.4)
+::: {.panel-tabset}
+
+### mod_1
+
+```{r exp6-summary-mod1, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_1)
 ```
+
+### mod_2
+
+```{r exp6-summary-mod2, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_2)
+```
+
+### mod_3
+
+```{r exp6-summary-mod3, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_3)
+```
+
+### mod_4
+
+```{r exp6-summary-mod4, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_4)
+```
+
+:::
 
 <!-- Pairwise comparisons removed -->
 
@@ -662,7 +821,7 @@ summary(mod.4)
 
 pairwise_time <- dplyr::bind_rows(
   {
-    emm <- emmeans::emmeans(mod.1, ~ time, type = "response")
+    emm <- emmeans::emmeans(mod_1, ~ time, type = "response")
     pr <- emmeans::contrast(emm, method = "pairwise", adjust = "tukey")
     d <- as.data.frame(summary(pr))
     d$Cutoff <- "No"
@@ -692,7 +851,7 @@ pairwise_time <- dplyr::bind_rows(
     d
   },
   {
-    emm <- emmeans::emmeans(mod.2, ~ time, type = "response")
+    emm <- emmeans::emmeans(mod_2, ~ time, type = "response")
     pr <- emmeans::contrast(emm, method = "pairwise", adjust = "tukey")
     d <- as.data.frame(summary(pr))
     d$Cutoff <- "Yes"
@@ -731,7 +890,7 @@ knitr::kable(
 
 pairwise_number <- dplyr::bind_rows(
   {
-    emm <- emmeans::emmeans(mod.3, ~ number | time, type = "response")
+    emm <- emmeans::emmeans(mod_3, ~ number | time, type = "response")
     pr <- emmeans::contrast(emm, method = "pairwise", by = "time", adjust = "tukey")
     d <- as.data.frame(summary(pr))
     d$Cutoff <- "No"
@@ -771,7 +930,7 @@ pairwise_number <- dplyr::bind_rows(
     d
   },
   {
-    emm <- emmeans::emmeans(mod.4, ~ number | time, type = "response")
+    emm <- emmeans::emmeans(mod_4, ~ number | time, type = "response")
     pr <- emmeans::contrast(emm, method = "pairwise", by = "time", adjust = "tukey")
     d <- as.data.frame(summary(pr))
     d$Cutoff <- "Yes"
@@ -862,10 +1021,10 @@ df_exp6_reads_fac <- df_exp6_reads_mod %>%
 
 mod_formula <- bf(gvb_sequence_number ~ mo(time) + mo(quantity_gbv) + offset(log(total_reads)))
 
-mod_exp6_reads <- brm(
+mod_5 <- brm(
   mod_formula, family = negbinomial(),
   data = df_exp6_reads_mod,
-  file = paste0(here::here("outputs/models/mod_exp6_reads_gvbseq_negbin_offset")),
+  file = here::here("outputs/models", "mod_5"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   control = list(step_size = 0.01, adapt_delta = 0.99),
   backend = "cmdstanr", silent = 0, refresh = 1000,
@@ -874,10 +1033,10 @@ mod_exp6_reads <- brm(
 
 mod_formula <- bf(gvb_sequence_number ~ mo(time) * mo(quantity_gbv) + offset(log(total_reads)))
 
-mod_exp6_reads_mo_int <- brm(
+mod_6 <- brm(
   mod_formula, family = negbinomial(),
   data = df_exp6_reads_mod,
-  file = paste0(here::here("outputs/models/mod_exp6_reads_mo_interact_offset")),
+  file = here::here("outputs/models", "mod_6"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   control = list(step_size = 0.01, adapt_delta = 0.99),
   backend = "cmdstanr", silent = 0, refresh = 1000,
@@ -886,10 +1045,10 @@ mod_exp6_reads_mo_int <- brm(
 
 mod_formula <- bf(gvb_sequence_number ~ time + quantity_gbv + offset(log(total_reads)))
 
-mod_exp6_reads_fac_add <- brm(
+mod_7 <- brm(
   mod_formula, family = negbinomial(),
   data = df_exp6_reads_fac,
-  file = paste0(here::here("outputs/models/mod_exp6_reads_fac_add_offset")),
+  file = here::here("outputs/models", "mod_7"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   control = list(step_size = 0.01, adapt_delta = 0.99),
   backend = "cmdstanr", silent = 0, refresh = 1000,
@@ -898,15 +1057,82 @@ mod_exp6_reads_fac_add <- brm(
 
 mod_formula <- bf(gvb_sequence_number ~ time * quantity_gbv + offset(log(total_reads)))
 
-mod_exp6_reads_fac_int <- brm(
+mod_8 <- brm(
   mod_formula, family = negbinomial(),
   data = df_exp6_reads_fac,
-  file = paste0(here::here("outputs/models/mod_exp6_reads_fac_int_offset")),
+  file = here::here("outputs/models", "mod_8"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   control = list(step_size = 0.01, adapt_delta = 0.99),
   backend = "cmdstanr", silent = 0, refresh = 1000,
   chains = 4, cores = 4, warmup = 2000, iter = 4000
 )
+
+df_exp6_reads_q1_base <- df.6.reads %>%
+  dplyr::mutate(
+    gvb_sequence_number = suppressWarnings(as.integer(round(as.numeric(.data$gvb_sequence_number)))),
+    quantity_gbv = as.numeric(.data$quantity_gbv),
+    total_reads = as.numeric(.data$total_reads),
+    tnum = suppressWarnings(as.numeric(as.character(.data$time)))
+  ) %>%
+  dplyr::filter(
+    !is.na(.data$gvb_sequence_number),
+    !is.na(.data$quantity_gbv),
+    !is.na(.data$time),
+    !is.na(.data$total_reads),
+    !is.na(.data$tnum),
+    .data$total_reads > 0,
+    .data$gvb_sequence_number >= 0L,
+    .data$quantity_gbv == 1
+  )
+
+exp6_reads_q1_time_levels <- sort(unique(stats::na.omit(df_exp6_reads_q1_base$tnum)))
+exp6_reads_q1_ok <- nrow(df_exp6_reads_q1_base) > 0L && length(exp6_reads_q1_time_levels) >= 2L
+
+if (exp6_reads_q1_ok) {
+  df_exp6_reads_q1_mod <- df_exp6_reads_q1_base %>%
+    dplyr::select(-tnum) %>%
+    dplyr::mutate(
+      time = ordered(
+        suppressWarnings(as.numeric(as.character(.data$time))),
+        levels = exp6_reads_q1_time_levels
+      )
+    )
+
+  df_exp6_reads_q1_fac <- df_exp6_reads_q1_mod %>%
+    dplyr::mutate(
+      time = factor(
+        as.character(suppressWarnings(as.numeric(as.character(.data$time)))),
+        levels = as.character(exp6_reads_q1_time_levels)
+      )
+    )
+
+  mod_formula <- bf(gvb_sequence_number ~ mo(time) + offset(log(total_reads)))
+
+  mod_9 <- brm(
+    mod_formula, family = negbinomial(),
+    data = df_exp6_reads_q1_mod,
+    file = here::here("outputs/models", "mod_9"),
+    threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+    control = list(step_size = 0.01, adapt_delta = 0.99),
+    backend = "cmdstanr", silent = 0, refresh = 1000,
+    chains = 4, cores = 4, warmup = 2000, iter = 4000
+  )
+
+  mod_formula <- bf(gvb_sequence_number ~ time + offset(log(total_reads)))
+
+  mod_10 <- brm(
+    mod_formula, family = negbinomial(),
+    data = df_exp6_reads_q1_fac,
+    file = here::here("outputs/models", "mod_10"),
+    threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+    control = list(step_size = 0.01, adapt_delta = 0.99),
+    backend = "cmdstanr", silent = 0, refresh = 1000,
+    chains = 4, cores = 4, warmup = 2000, iter = 4000
+  )
+} else {
+  mod_9 <- NULL
+  mod_10 <- NULL
+}
 ```
 
 ```{r exp6-reads-waic-compute, include=FALSE}
@@ -923,10 +1149,10 @@ waic_tbl_one_reads <- function(m, model_name) {
 }
 
 exp6_reads_waic_tbl <- dplyr::bind_rows(
-  waic_tbl_one_reads(mod_exp6_reads, "mo(time) + mo(quantity_gbv)"),
-  waic_tbl_one_reads(mod_exp6_reads_mo_int, "mo(time) * mo(quantity_gbv)"),
-  waic_tbl_one_reads(mod_exp6_reads_fac_add, "time + quantity_gbv (factor)"),
-  waic_tbl_one_reads(mod_exp6_reads_fac_int, "time * quantity_gbv (factor)")
+  waic_tbl_one_reads(mod_5, "mo(time) + mo(quantity_gbv)"),
+  waic_tbl_one_reads(mod_6, "mo(time) * mo(quantity_gbv)"),
+  waic_tbl_one_reads(mod_7, "time + quantity_gbv (factor)"),
+  waic_tbl_one_reads(mod_8, "time * quantity_gbv (factor)")
 ) %>%
   dplyr::arrange(WAIC) %>%
   dplyr::mutate(delta_WAIC = WAIC - min(WAIC, na.rm = TRUE)) %>%
@@ -936,14 +1162,54 @@ exp6_reads_waic_tbl <- dplyr::bind_rows(
     delta_WAIC = round(delta_WAIC, 2)
   ) %>%
   dplyr::select(Model, WAIC, SE, delta_WAIC)
+
+exp6_reads_q1_waic_tbl <- if (exp6_reads_q1_ok) {
+  dplyr::bind_rows(
+    waic_tbl_one_reads(mod_9, "mo(time)"),
+    waic_tbl_one_reads(mod_10, "time (factor)")
+  ) %>%
+    dplyr::arrange(WAIC) %>%
+    dplyr::mutate(delta_WAIC = WAIC - min(WAIC, na.rm = TRUE)) %>%
+    dplyr::mutate(
+      WAIC = round(WAIC, 2),
+      SE = round(SE, 2),
+      delta_WAIC = round(delta_WAIC, 2)
+    ) %>%
+    dplyr::select(Model, WAIC, SE, delta_WAIC)
+} else {
+  NULL
+}
+
+exp6_reads_q1_plot_mod <- if (
+  exp6_reads_q1_ok &&
+    !is.null(exp6_reads_q1_waic_tbl) &&
+    nrow(exp6_reads_q1_waic_tbl) > 0L
+) {
+  if (identical(as.character(exp6_reads_q1_waic_tbl$Model[[1]]), "time (factor)")) {
+    mod_10
+  } else {
+    mod_9
+  }
+} else {
+  NULL
+}
+exp6_reads_q1_plot_label <- if (
+  exp6_reads_q1_ok &&
+    !is.null(exp6_reads_q1_waic_tbl) &&
+    nrow(exp6_reads_q1_waic_tbl) > 0L
+) {
+  as.character(exp6_reads_q1_waic_tbl$Model[[1]])
+} else {
+  ""
+}
 ```
 
 #### Effect plots
 
-```{r exp6-reads-eff, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4.5, out.width="100%", dpi=600}
+```{r exp6-reads-eff, warning=FALSE, echo=FALSE, fig.width=14, fig.height=4.5, out.width="100%", dpi=600}
 raw <- df_exp6_reads_mod
 
-ce_both <- conditional_effects(mod_exp6_reads_mo_int, effects = "time:quantity_gbv")[[1]]
+ce_both <- conditional_effects(mod_6, effects = "time:quantity_gbv")[[1]]
 qty_lv <- sort(unique(as.numeric(as.character(ce_both$quantity_gbv))))
 ce_both <- ce_both %>%
   dplyr::mutate(
@@ -963,7 +1229,7 @@ raw_col <- raw %>%
 
 n_qty <- dplyr::n_distinct(ce_both$quantity_gbv)
 pal <- exp6_reads_qty_palette(n_qty)
-ce_pd <- ggplot2::position_dodge(width = 0.85)
+ce_pd <- ggplot2::position_dodge(width = exp6_reads_qty_dodge_w)
 
 exp6_reads_plot_theme <- ggplot2::theme_bw() +
   ggplot2::theme(
@@ -992,7 +1258,11 @@ p_exp6_reads_eff <- ggplot2::ggplot(
     data = raw_col,
     ggplot2::aes(x = .data$xtime, y = .data$gvb_sequence_number, color = .data$quantity_gbv),
     inherit.aes = FALSE,
-    position = ggplot2::position_jitterdodge(jitter.width = 0.12, jitter.height = 0.175, dodge.width = 0.85),
+    position = ggplot2::position_jitterdodge(
+      jitter.width = 0.12,
+      jitter.height = 0.175,
+      dodge.width = exp6_reads_qty_dodge_w
+    ),
     alpha = 0.4,
     size = 0.85,
     stroke = 0
@@ -1011,27 +1281,141 @@ p_exp6_reads_eff <- ggplot2::ggplot(
   ) +
   exp6_reads_plot_theme +
   ggplot2::labs(x = "GVB exposure (hrs)", y = "GVB sequence number") +
-  ggplot2::guides(color = ggplot2::guide_legend(title = "GVB quantity", reverse = TRUE))
+  ggplot2::guides(
+    color = ggplot2::guide_legend(
+      title = "GVB quantity",
+      reverse = TRUE
+    )
+  )
+
+exp6_reads_combo_tag_theme <- ggplot2::theme(
+  plot.tag = ggplot2::element_text(size = 11, face = "bold", hjust = 0, vjust = 1)
+)
+exp6_reads_combo_legend_theme <- ggplot2::theme(
+  legend.position = c(0.97, 0.2),
+  legend.justification = c(1, 0.5)
+)
+
+if (exp6_reads_q1_ok) {
+  n_q1 <- length(exp6_reads_q1_time_levels)
+  xlim_q1 <- exp6_reads_xlim_for_n(n_q1)
+  ce_time_q1 <- conditional_effects(exp6_reads_q1_plot_mod, effects = "time")[[1]] %>%
+    dplyr::mutate(
+      hrs = suppressWarnings(as.numeric(as.character(.data$time))),
+      xtime = match(.data$hrs, exp6_reads_q1_time_levels)
+    )
+
+  raw_col_q1 <- df_exp6_reads_q1_mod %>%
+    dplyr::mutate(
+      hrs = suppressWarnings(as.numeric(as.character(.data$time))),
+      xtime = match(.data$hrs, exp6_reads_q1_time_levels) + exp6_reads_fig_x_nudge_raw
+    )
+
+  y_upper_q1 <- max(
+    exp6_reads_fig_y_upper,
+    suppressWarnings(max(as.numeric(ce_time_q1$upper__), na.rm = TRUE)),
+    suppressWarnings(max(as.numeric(ce_time_q1$estimate__), na.rm = TRUE)),
+    suppressWarnings(max(raw_col_q1$gvb_sequence_number, na.rm = TRUE)),
+    10,
+    na.rm = TRUE
+  )
+  y_breaks_q1 <- exp6_reads_y_breaks[exp6_reads_y_breaks <= y_upper_q1]
+
+  exp6_reads_plot_theme_q1 <- ggplot2::theme_bw() +
+    ggplot2::theme(
+      panel.grid.major.y = ggplot2::element_line(colour = "grey75", linewidth = 0.45),
+      panel.grid.minor.y = ggplot2::element_blank(),
+      panel.grid.major.x = ggplot2::element_line(colour = "grey85", linewidth = 0.35)
+    )
+
+  col_mu_q1 <- "#0072B2"
+  p_exp6_reads_q1_eff <- ggplot2::ggplot(
+    ce_time_q1,
+    ggplot2::aes(x = .data$xtime, y = .data$estimate__, ymin = .data$lower__, ymax = .data$upper__)
+  ) +
+    ggplot2::geom_point(
+      data = raw_col_q1,
+      ggplot2::aes(x = .data$xtime, y = .data$gvb_sequence_number),
+      inherit.aes = FALSE,
+      position = ggplot2::position_jitter(width = 0.1, height = 0.175),
+      alpha = 0.4,
+      size = 0.85,
+      color = "grey40",
+      stroke = 0
+    ) +
+    ggplot2::geom_errorbar(width = 0.12, linewidth = 0.9, color = col_mu_q1) +
+    ggplot2::geom_point(size = 2.5, alpha = 0.9, color = col_mu_q1) +
+    ggplot2::scale_x_continuous(
+      breaks = seq_len(n_q1),
+      labels = as.character(exp6_reads_q1_time_levels),
+      limits = xlim_q1,
+      expand = c(0, 0)
+    ) +
+    ggplot2::scale_y_continuous(
+      trans = scales::log1p_trans(),
+      limits = c(exp6_reads_fig_y_lower_f3, y_upper_q1),
+      breaks = y_breaks_q1,
+      labels = exp6_reads_y_labels,
+      minor_breaks = NULL,
+      expand = ggplot2::expansion(mult = c(0, 0))
+    ) +
+    exp6_reads_plot_theme_q1 +
+    ggplot2::labs(x = "GVB exposure (hrs)", y = "GVB sequence number")
+
+  p_exp6_reads_eff_combo <- patchwork::wrap_plots(
+    p_exp6_reads_eff +
+      exp6_reads_combo_legend_theme +
+      exp6_reads_combo_tag_theme +
+      ggplot2::labs(tag = "a)"),
+    p_exp6_reads_q1_eff +
+      ggplot2::labs(
+        caption = "Quantity GVB = 1.",
+        tag = "b)"
+      ) +
+      ggplot2::theme(
+        plot.caption = ggplot2::element_text(size = 8.5, colour = "grey25", hjust = 0),
+        plot.caption.position = "panel"
+      ) +
+      exp6_reads_combo_tag_theme,
+    ncol = 2
+  )
+} else {
+  p_exp6_reads_q1_eff <- NULL
+  p_exp6_reads_eff_combo <- patchwork::wrap_plots(
+    p_exp6_reads_eff +
+      exp6_reads_combo_legend_theme +
+      exp6_reads_combo_tag_theme +
+      ggplot2::labs(tag = "a)"),
+    ncol = 1
+  )
+}
 
 ggplot2::ggsave(
-  filename = here::here("outputs/plots", "exp6_reads_effect_time_by_quantity.png"),
+  filename = here::here("outputs/plots", "figure-03-exp6-reads-panel-a-only.png"),
   plot = p_exp6_reads_eff,
-  width = knitr::opts_current$get("fig.width"),
-  height = knitr::opts_current$get("fig.height"),
+  width = 7,
+  height = 4.5,
+  dpi = 600
+)
+ggplot2::ggsave(
+  filename = here::here("outputs/plots", "figure-03-exp6-reads-panels-a-b.png"),
+  plot = p_exp6_reads_eff_combo,
+  width = 14,
+  height = 4.5,
   dpi = 600
 )
 
-p_exp6_reads_eff
+p_exp6_reads_eff_combo
 ```
 
-Figure 3: Experiment 6, **GVB sequence counts** (reads workbook). Conditional effect plot of GVB exposure (2 h and 24 h) on mean sequence count by GVB quantity under **`mo(time) × mo(quantity)`** with **`offset(log(total_reads))`**. Vertical axis is **log(1 + count)** (lower limit slightly below zero so small estimates are visible). Jittered semi-transparent points are raw counts; error bars are 95% credible intervals and coloured points are posterior means.
+Figure 3: GVB sequence counts from the reads workbook. **a)** 2 h and 24 h only — mean sequence count by GVB quantity. **b)** When shown: quantity GVB = 1 at all exposure times — marginal effect of exposure time on mean count. Vertical axis is log(1 + count). Jittered points are raw counts; error bars are 95% credible intervals and coloured points are posterior means.
 
 #### Tables
 
 Tabulated estimates use the **preferred monotonic interaction** model **`mo(time) * mo(quantity_gbv)`** (negative binomial mean count with **`offset(log(total_reads))`**; marginal **`conditional_effects()`**). See the **Model comparison** tab for **WAIC** across all candidate models.
 
 ```{r exp6-reads-estimates, echo=FALSE}
-ce_exp6_t <- conditional_effects(mod_exp6_reads_mo_int, effects = "time")[[1]] %>%
+ce_exp6_t <- conditional_effects(mod_6, effects = "time")[[1]] %>%
   dplyr::transmute(
     `Time (hrs)` = time,
     `Estimate` = round(estimate__, 3),
@@ -1039,7 +1423,7 @@ ce_exp6_t <- conditional_effects(mod_exp6_reads_mo_int, effects = "time")[[1]] %
     `Upper` = round(upper__, 3)
   )
 
-ce_exp6_q <- conditional_effects(mod_exp6_reads_mo_int, effects = "quantity_gbv")[[1]] %>%
+ce_exp6_q <- conditional_effects(mod_6, effects = "quantity_gbv")[[1]] %>%
   dplyr::transmute(
     `Quantity GVB` = quantity_gbv,
     `Estimate` = round(estimate__, 3),
@@ -1060,6 +1444,36 @@ knitr::kable(
 )
 ```
 
+**Quantity GVB = 1 — all exposure times in workbook** — tabulated marginal time effects use the **lower-WAIC** q1 model (**`mo(time)`** or **factor `time`**; **Model comparison** below).
+
+```{r exp6-reads-estimates-q1, echo=FALSE}
+if (exp6_reads_q1_ok) {
+  ce_exp6_q1_t <- conditional_effects(exp6_reads_q1_plot_mod, effects = "time")[[1]] %>%
+    dplyr::transmute(
+      `Time (hrs)` = time,
+      `Estimate` = round(estimate__, 3),
+      `Lower` = round(lower__, 3),
+      `Upper` = round(upper__, 3)
+    )
+
+  knitr::kable(
+    ce_exp6_q1_t,
+    caption = paste0(
+      "Experiment 6 reads — quantity GVB = 1, all exposure times: lowest-WAIC q1 model (",
+      exp6_reads_q1_plot_label,
+      ") with offset — conditional effect of time (mean count)."
+    ),
+    format = "html"
+  )
+} else {
+  knitr::kable(
+    tibble::tibble(Note = "Not fitted: need \u2265 1 row with quantity_gbv = 1 and \u2265 2 distinct exposure times after filtering."),
+    caption = "Experiment 6 reads — quantity GVB = 1 (all times) — no table.",
+    format = "html"
+  )
+}
+```
+
 #### Models
 
 ```{r exp6-reads-models-show, ref.label="exp6-reads-models-fit", echo=TRUE, eval=FALSE}
@@ -1074,6 +1488,13 @@ knitr::kable(
   caption = "Experiment 6 reads: WAIC (lower is better; all models include offset log(total reads)).",
   format = "html"
 )
+if (exp6_reads_q1_ok) {
+  knitr::kable(
+    exp6_reads_q1_waic_tbl,
+    caption = "Experiment 6 reads — **quantity GVB = 1, all exposure times**: WAIC for `mo(time)` vs factor `time` (offset log(total reads); distinct comparison from the table above).",
+    format = "html"
+  )
+}
 ```
 
 #### Validation
@@ -1083,20 +1504,68 @@ knitr::kable(
 #| message: false
 #| fig-show: hold
 #| layout-ncol: 2
-pp_check(mod_exp6_reads, ndraws = 200)
-pp_check(mod_exp6_reads_mo_int, ndraws = 200)
-pp_check(mod_exp6_reads_fac_add, ndraws = 200)
-pp_check(mod_exp6_reads_fac_int, ndraws = 200)
+pp_check(mod_5, ndraws = 200)
+pp_check(mod_6, ndraws = 200)
+pp_check(mod_7, ndraws = 200)
+pp_check(mod_8, ndraws = 200)
+```
+
+**Quantity GVB = 1 (all exposure times)** — posterior predictive checks: **`mo(time)`** vs **factor `time`**.
+
+```{r exp6-reads-pp-check-q1}
+#| echo: false
+#| message: false
+#| fig-show: hold
+#| layout-ncol: 2
+if (exp6_reads_q1_ok) {
+  pp_check(mod_9, ndraws = 200)
+  pp_check(mod_10, ndraws = 200)
+}
 ```
 
 #### Output
 
-```{r exp6-reads-summary, echo=FALSE}
-summary(mod_exp6_reads)
-summary(mod_exp6_reads_mo_int)
-summary(mod_exp6_reads_fac_add)
-summary(mod_exp6_reads_fac_int)
+::: {.panel-tabset}
+
+##### mod_5
+
+```{r exp6-reads-summary-base, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_5)
 ```
+
+##### mod_6
+
+```{r exp6-reads-summary-mo-int, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_6)
+```
+
+##### mod_7
+
+```{r exp6-reads-summary-fac-add, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_7)
+```
+
+##### mod_8
+
+```{r exp6-reads-summary-fac-int, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_8)
+```
+
+##### Quantity GVB = 1 (q1)
+
+```{r exp6-reads-summary-q1, echo=FALSE}
+#| class-output: model-output-panel
+if (exp6_reads_q1_ok) {
+  summary(mod_9)
+  summary(mod_10)
+}
+```
+
+:::
 
 :::
 
@@ -1109,7 +1578,8 @@ df_exp6_reads_no0_mod <- df.6.reads.no0 %>%
   dplyr::mutate(
     gvb_sequence_number = suppressWarnings(as.integer(round(as.numeric(.data$gvb_sequence_number)))),
     quantity_gbv = as.numeric(.data$quantity_gbv),
-    total_reads = as.numeric(.data$total_reads)
+    total_reads = as.numeric(.data$total_reads),
+    tnum_rd = suppressWarnings(as.numeric(as.character(.data$time)))
   ) %>%
   dplyr::filter(
     !is.na(.data$gvb_sequence_number),
@@ -1119,8 +1589,11 @@ df_exp6_reads_no0_mod <- df.6.reads.no0 %>%
     .data$total_reads > 0,
     .data$gvb_sequence_number >= 0L,
     .data$quantity_gbv != 0,
-    suppressWarnings(as.numeric(as.character(.data$time))) %in% c(2, 24)
+    !is.na(.data$tnum_rd),
+    .data$tnum_rd != 0,
+    .data$tnum_rd %in% c(2, 24)
   ) %>%
+  dplyr::select(-tnum_rd) %>%
   dplyr::mutate(
     time = ordered(
       suppressWarnings(as.numeric(as.character(.data$time))),
@@ -1141,10 +1614,10 @@ df_exp6_reads_no0_fac <- df_exp6_reads_no0_mod %>%
 
 mod_formula <- bf(gvb_sequence_number ~ mo(time) + mo(quantity_gbv) + offset(log(total_reads)))
 
-mod_exp6_reads_no0 <- brm(
+mod_11 <- brm(
   mod_formula, family = negbinomial(),
   data = df_exp6_reads_no0_mod,
-  file = paste0(here::here("outputs/models/mod_exp6_reads_no0_gvbseq_negbin_offset")),
+  file = here::here("outputs/models", "mod_11"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   control = list(step_size = 0.01, adapt_delta = 0.99),
   backend = "cmdstanr", silent = 0, refresh = 1000,
@@ -1153,10 +1626,10 @@ mod_exp6_reads_no0 <- brm(
 
 mod_formula <- bf(gvb_sequence_number ~ mo(time) * mo(quantity_gbv) + offset(log(total_reads)))
 
-mod_exp6_reads_no0_mo_int <- brm(
+mod_12 <- brm(
   mod_formula, family = negbinomial(),
   data = df_exp6_reads_no0_mod,
-  file = paste0(here::here("outputs/models/mod_exp6_reads_no0_mo_interact_offset")),
+  file = here::here("outputs/models", "mod_12"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   control = list(step_size = 0.01, adapt_delta = 0.99),
   backend = "cmdstanr", silent = 0, refresh = 1000,
@@ -1165,10 +1638,10 @@ mod_exp6_reads_no0_mo_int <- brm(
 
 mod_formula <- bf(gvb_sequence_number ~ time + quantity_gbv + offset(log(total_reads)))
 
-mod_exp6_reads_no0_fac_add <- brm(
+mod_13 <- brm(
   mod_formula, family = negbinomial(),
   data = df_exp6_reads_no0_fac,
-  file = paste0(here::here("outputs/models/mod_exp6_reads_no0_fac_add_offset")),
+  file = here::here("outputs/models", "mod_13"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   control = list(step_size = 0.01, adapt_delta = 0.99),
   backend = "cmdstanr", silent = 0, refresh = 1000,
@@ -1177,15 +1650,84 @@ mod_exp6_reads_no0_fac_add <- brm(
 
 mod_formula <- bf(gvb_sequence_number ~ time * quantity_gbv + offset(log(total_reads)))
 
-mod_exp6_reads_no0_fac_int <- brm(
+mod_14 <- brm(
   mod_formula, family = negbinomial(),
   data = df_exp6_reads_no0_fac,
-  file = paste0(here::here("outputs/models/mod_exp6_reads_no0_fac_int_offset")),
+  file = here::here("outputs/models", "mod_14"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   control = list(step_size = 0.01, adapt_delta = 0.99),
   backend = "cmdstanr", silent = 0, refresh = 1000,
   chains = 4, cores = 4, warmup = 2000, iter = 4000
 )
+
+df_exp6_reads_no0_q1_base <- df.6.reads.no0 %>%
+  dplyr::mutate(
+    gvb_sequence_number = suppressWarnings(as.integer(round(as.numeric(.data$gvb_sequence_number)))),
+    quantity_gbv = as.numeric(.data$quantity_gbv),
+    total_reads = as.numeric(.data$total_reads),
+    tnum = suppressWarnings(as.numeric(as.character(.data$time)))
+  ) %>%
+  dplyr::filter(
+    !is.na(.data$gvb_sequence_number),
+    !is.na(.data$quantity_gbv),
+    !is.na(.data$time),
+    !is.na(.data$total_reads),
+    !is.na(.data$tnum),
+    .data$total_reads > 0,
+    .data$gvb_sequence_number >= 0L,
+    .data$quantity_gbv == 1,
+    .data$tnum != 0,
+    .data$tnum != 2
+  )
+
+exp6_reads_no0_q1_time_levels <- sort(unique(stats::na.omit(df_exp6_reads_no0_q1_base$tnum)))
+exp6_reads_no0_q1_ok <- nrow(df_exp6_reads_no0_q1_base) > 0L && length(exp6_reads_no0_q1_time_levels) >= 2L
+
+if (exp6_reads_no0_q1_ok) {
+  df_exp6_reads_no0_q1_mod <- df_exp6_reads_no0_q1_base %>%
+    dplyr::select(-tnum) %>%
+    dplyr::mutate(
+      time = ordered(
+        suppressWarnings(as.numeric(as.character(.data$time))),
+        levels = exp6_reads_no0_q1_time_levels
+      )
+    )
+
+  df_exp6_reads_no0_q1_fac <- df_exp6_reads_no0_q1_mod %>%
+    dplyr::mutate(
+      time = factor(
+        as.character(suppressWarnings(as.numeric(as.character(.data$time)))),
+        levels = as.character(exp6_reads_no0_q1_time_levels)
+      )
+    )
+
+  mod_formula <- bf(gvb_sequence_number ~ mo(time) + offset(log(total_reads)))
+
+  mod_15 <- brm(
+    mod_formula, family = negbinomial(),
+    data = df_exp6_reads_no0_q1_mod,
+    file = here::here("outputs/models", "mod_15"),
+    threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+    control = list(step_size = 0.01, adapt_delta = 0.99),
+    backend = "cmdstanr", silent = 0, refresh = 1000,
+    chains = 4, cores = 4, warmup = 2000, iter = 4000
+  )
+
+  mod_formula <- bf(gvb_sequence_number ~ time + offset(log(total_reads)))
+
+  mod_16 <- brm(
+    mod_formula, family = negbinomial(),
+    data = df_exp6_reads_no0_q1_fac,
+    file = here::here("outputs/models", "mod_16"),
+    threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+    control = list(step_size = 0.01, adapt_delta = 0.99),
+    backend = "cmdstanr", silent = 0, refresh = 1000,
+    chains = 4, cores = 4, warmup = 2000, iter = 4000
+  )
+} else {
+  mod_15 <- NULL
+  mod_16 <- NULL
+}
 ```
 
 ```{r exp6-reads-no0-waic-compute, include=FALSE}
@@ -1202,10 +1744,10 @@ waic_tbl_one_reads_no0 <- function(m, model_name) {
 }
 
 exp6_reads_no0_waic_tbl <- dplyr::bind_rows(
-  waic_tbl_one_reads_no0(mod_exp6_reads_no0, "mo(time) + mo(quantity_gbv)"),
-  waic_tbl_one_reads_no0(mod_exp6_reads_no0_mo_int, "mo(time) * mo(quantity_gbv)"),
-  waic_tbl_one_reads_no0(mod_exp6_reads_no0_fac_add, "time + quantity_gbv (factor)"),
-  waic_tbl_one_reads_no0(mod_exp6_reads_no0_fac_int, "time * quantity_gbv (factor)")
+  waic_tbl_one_reads_no0(mod_11, "mo(time) + mo(quantity_gbv)"),
+  waic_tbl_one_reads_no0(mod_12, "mo(time) * mo(quantity_gbv)"),
+  waic_tbl_one_reads_no0(mod_13, "time + quantity_gbv (factor)"),
+  waic_tbl_one_reads_no0(mod_14, "time * quantity_gbv (factor)")
 ) %>%
   dplyr::arrange(WAIC) %>%
   dplyr::mutate(delta_WAIC = WAIC - min(WAIC, na.rm = TRUE)) %>%
@@ -1215,14 +1757,49 @@ exp6_reads_no0_waic_tbl <- dplyr::bind_rows(
     delta_WAIC = round(delta_WAIC, 2)
   ) %>%
   dplyr::select(Model, WAIC, SE, delta_WAIC)
+
+exp6_reads_no0_q1_waic_tbl <- if (exp6_reads_no0_q1_ok) {
+  dplyr::bind_rows(
+    waic_tbl_one_reads_no0(mod_15, "mo(time)"),
+    waic_tbl_one_reads_no0(mod_16, "time (factor)")
+  ) %>%
+    dplyr::arrange(WAIC) %>%
+    dplyr::mutate(delta_WAIC = WAIC - min(WAIC, na.rm = TRUE)) %>%
+    dplyr::mutate(
+      WAIC = round(WAIC, 2),
+      SE = round(SE, 2),
+      delta_WAIC = round(delta_WAIC, 2)
+    ) %>%
+    dplyr::select(Model, WAIC, SE, delta_WAIC)
+} else {
+  NULL
+}
+
+# WAIC-best q1 time parameterization (for Model comparison tab / narrative)
+exp6_reads_no0_q1_waic_preferred_label <- if (
+  exp6_reads_no0_q1_ok &&
+    !is.null(exp6_reads_no0_q1_waic_tbl) &&
+    nrow(exp6_reads_no0_q1_waic_tbl) > 0L
+) {
+  as.character(exp6_reads_no0_q1_waic_tbl$Model[[1]])
+} else {
+  ""
+}
+
+# Figure 4b + quantity-1 marginal table: monotonic `mo(time)` (not WAIC-selected factor)
+exp6_reads_no0_q1_plot_mod <- if (exp6_reads_no0_q1_ok) mod_15 else NULL
+exp6_reads_no0_q1_plot_label <- "mo(time)"
 ```
 
 #### Effect plots
 
-```{r exp6-reads-no0-eff, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4.5, out.width="100%", dpi=600}
+```{r exp6-reads-no0-eff, warning=FALSE, echo=FALSE, fig.width=14, fig.height=4.5, out.width="100%", dpi=600}
 raw_no0 <- df_exp6_reads_no0_mod
 
-ce_both_no0 <- conditional_effects(mod_exp6_reads_no0_mo_int, effects = "time:quantity_gbv")[[1]]
+ce_both_no0 <- conditional_effects(mod_12, effects = "time:quantity_gbv")[[1]] %>%
+  dplyr::mutate(.ce_tnum = suppressWarnings(as.numeric(as.character(.data$time)))) %>%
+  dplyr::filter(.data$.ce_tnum %in% c(2, 24)) %>%
+  dplyr::select(-.ce_tnum)
 qty_lv_no0 <- sort(unique(as.numeric(as.character(ce_both_no0$quantity_gbv))))
 ce_both_no0 <- ce_both_no0 %>%
   dplyr::mutate(
@@ -1261,7 +1838,7 @@ exp6_reads_fig_legend_npc_no0 <- c(
 
 n_qty_no0 <- dplyr::n_distinct(ce_both_no0$quantity_gbv)
 pal_no0 <- exp6_reads_qty_palette(n_qty_no0)
-ce_pd_no0 <- ggplot2::position_dodge(width = 0.85)
+ce_pd_no0 <- ggplot2::position_dodge(width = exp6_reads_qty_dodge_w)
 
 exp6_reads_plot_theme_no0 <- ggplot2::theme_bw() +
   ggplot2::theme(
@@ -1290,7 +1867,11 @@ p_exp6_reads_no0_eff <- ggplot2::ggplot(
     data = raw_col_no0,
     ggplot2::aes(x = .data$xtime, y = .data$gvb_sequence_number, color = .data$quantity_gbv),
     inherit.aes = FALSE,
-    position = ggplot2::position_jitterdodge(jitter.width = 0.12, jitter.height = 0.175, dodge.width = 0.85),
+    position = ggplot2::position_jitterdodge(
+      jitter.width = 0.12,
+      jitter.height = 0.175,
+      dodge.width = exp6_reads_qty_dodge_w
+    ),
     alpha = 0.4,
     size = 0.85,
     stroke = 0
@@ -1309,27 +1890,152 @@ p_exp6_reads_no0_eff <- ggplot2::ggplot(
   ) +
   exp6_reads_plot_theme_no0 +
   ggplot2::labs(x = "GVB exposure (hrs)", y = "GVB sequence number") +
-  ggplot2::guides(color = ggplot2::guide_legend(title = "GVB quantity", reverse = TRUE))
+  ggplot2::guides(
+    color = ggplot2::guide_legend(
+      title = "GVB quantity",
+      reverse = TRUE
+    )
+  )
+
+if (exp6_reads_no0_q1_ok) {
+  n_q1n0 <- length(exp6_reads_no0_q1_time_levels)
+  ce_time_no0_q1 <- conditional_effects(exp6_reads_no0_q1_plot_mod, effects = "time")[[1]] %>%
+    dplyr::mutate(hrs = suppressWarnings(as.numeric(as.character(.data$time)))) %>%
+    dplyr::filter(.data$hrs != 0) %>%
+    dplyr::mutate(xtime = match(.data$hrs, exp6_reads_no0_q1_time_levels))
+
+  mx_bump <- max(
+    0,
+    suppressWarnings(max(as.numeric(ce_time_no0_q1$upper__), na.rm = TRUE)),
+    suppressWarnings(max(df_exp6_reads_no0_q1_mod$gvb_sequence_number, na.rm = TRUE)),
+    na.rm = TRUE
+  )
+  exp6_reads_fig_y_upper_no0 <- max(exp6_reads_fig_y_upper_no0, mx_bump * 1.12, 10)
+  exp6_reads_y_breaks_use_no0 <- exp6_reads_y_breaks[exp6_reads_y_breaks <= exp6_reads_fig_y_upper_no0]
+
+  raw_col_no0_q1 <- df_exp6_reads_no0_q1_mod %>%
+    dplyr::mutate(
+      hrs = suppressWarnings(as.numeric(as.character(.data$time))),
+      xtime = match(.data$hrs, exp6_reads_no0_q1_time_levels) + exp6_reads_fig_x_nudge_raw
+    )
+
+  y_upper_no0_q1 <- max(
+    exp6_reads_fig_y_upper_no0,
+    suppressWarnings(max(as.numeric(ce_time_no0_q1$upper__), na.rm = TRUE)),
+    suppressWarnings(max(as.numeric(ce_time_no0_q1$estimate__), na.rm = TRUE)),
+    suppressWarnings(max(raw_col_no0_q1$gvb_sequence_number, na.rm = TRUE)),
+    10,
+    na.rm = TRUE
+  )
+  y_breaks_no0_q1 <- exp6_reads_y_breaks[exp6_reads_y_breaks <= y_upper_no0_q1]
+
+  exp6_reads_plot_theme_no0_q1 <- ggplot2::theme_bw() +
+    ggplot2::theme(
+      panel.grid.major.y = ggplot2::element_line(colour = "grey75", linewidth = 0.45),
+      panel.grid.minor.y = ggplot2::element_blank(),
+      panel.grid.major.x = ggplot2::element_line(colour = "grey85", linewidth = 0.35)
+    )
+
+  col_mu_no0_q1 <- "#0072B2"
+  p_exp6_reads_no0_q1_eff <- ggplot2::ggplot(
+    ce_time_no0_q1,
+    ggplot2::aes(x = .data$xtime, y = .data$estimate__, ymin = .data$lower__, ymax = .data$upper__)
+  ) +
+    ggplot2::geom_point(
+      data = raw_col_no0_q1,
+      ggplot2::aes(x = .data$xtime, y = .data$gvb_sequence_number),
+      inherit.aes = FALSE,
+      position = ggplot2::position_jitter(width = 0.1, height = 0.175),
+      alpha = 0.4,
+      size = 0.85,
+      color = "grey40",
+      stroke = 0
+    ) +
+    ggplot2::geom_errorbar(width = 0.12, linewidth = 0.9, color = col_mu_no0_q1) +
+    ggplot2::geom_point(size = 2.5, alpha = 0.9, color = col_mu_no0_q1) +
+    ggplot2::scale_x_continuous(
+      breaks = seq_len(n_q1n0),
+      labels = as.character(exp6_reads_no0_q1_time_levels),
+      limits = exp6_reads_xlim_for_n(n_q1n0),
+      expand = c(0, 0)
+    ) +
+    ggplot2::scale_y_continuous(
+      trans = scales::log1p_trans(),
+      limits = c(0, y_upper_no0_q1),
+      breaks = y_breaks_no0_q1,
+      labels = exp6_reads_y_labels,
+      minor_breaks = NULL,
+      expand = ggplot2::expansion(mult = c(0, 0))
+    ) +
+    exp6_reads_plot_theme_no0_q1 +
+    ggplot2::labs(x = "GVB exposure (hrs)", y = "GVB sequence number")
+
+  p_exp6_reads_no0_left <- p_exp6_reads_no0_eff +
+    ggplot2::scale_y_continuous(
+      trans = scales::log1p_trans(),
+      limits = c(0, exp6_reads_fig_y_upper_no0),
+      breaks = exp6_reads_y_breaks_use_no0,
+      labels = exp6_reads_y_labels,
+      minor_breaks = NULL,
+      expand = ggplot2::expansion(mult = c(0, 0))
+    )
+
+  p_exp6_reads_no0_eff_combo <- patchwork::wrap_plots(
+    p_exp6_reads_no0_left +
+      exp6_reads_combo_legend_theme +
+      exp6_reads_combo_tag_theme +
+      ggplot2::labs(tag = "a)"),
+    p_exp6_reads_no0_q1_eff +
+      ggplot2::labs(
+        caption = "Quantity GVB = 1.",
+        tag = "b)"
+      ) +
+      ggplot2::theme(
+        plot.caption = ggplot2::element_text(size = 8.5, colour = "grey25", hjust = 0),
+        plot.caption.position = "panel"
+      ) +
+      exp6_reads_combo_tag_theme,
+    ncol = 2
+  )
+} else {
+  p_exp6_reads_no0_q1_eff <- NULL
+  p_exp6_reads_no0_eff_combo <- patchwork::wrap_plots(
+    p_exp6_reads_no0_eff +
+      exp6_reads_combo_legend_theme +
+      exp6_reads_combo_tag_theme +
+      ggplot2::labs(tag = "a)"),
+    ncol = 1
+  )
+}
 
 ggplot2::ggsave(
-  filename = here::here("outputs/plots", "exp6_reads_no0_effect_time_by_quantity.png"),
+  filename = here::here("outputs/plots", "figure-04-exp6-reads-no0-panel-a-only.png"),
   plot = p_exp6_reads_no0_eff,
-  width = knitr::opts_current$get("fig.width"),
-  height = knitr::opts_current$get("fig.height"),
+  width = 7,
+  height = 4.5,
+  dpi = 600
+)
+ggplot2::ggsave(
+  filename = here::here("outputs/plots", "figure-04-exp6-reads-no0-panels-a-b.png"),
+  plot = p_exp6_reads_no0_eff_combo,
+  width = 14,
+  height = 4.5,
   dpi = 600
 )
 
-p_exp6_reads_no0_eff
+p_exp6_reads_no0_eff_combo
 ```
 
-Figure 4: Experiment 6, **GVB sequence counts** (reads workbook without time 0). Same design as Figure 3: **`mo(time) × mo(quantity)`** with **`offset(log(total_reads))`**, **log(1 + count)** on the vertical axis. Jittered points are raw counts; error bars are 95% credible intervals and coloured points are posterior means. Source workbook omits 0 h exposure rows.
+Figure 4: GVB sequence counts from the reads workbook with 0 h exposure excluded. **a)** 2 h and 24 h only — mean sequence count by GVB quantity. **b)** When shown: quantity GVB = 1 at the remaining exposure times — marginal effect of exposure time on mean count. Vertical axis is log(1 + count). Jittered points are raw counts; error bars are 95% credible intervals and coloured points are posterior means.
 
 #### Tables
 
 Tabulated estimates use the **preferred monotonic interaction** model **`mo(time) * mo(quantity_gbv)`** (negative binomial mean count with **`offset(log(total_reads))`**; marginal **`conditional_effects()`**). See the **Model comparison** tab for **WAIC** across all candidate models.
 
 ```{r exp6-reads-no0-estimates, echo=FALSE}
-ce_exp6_no0_t <- conditional_effects(mod_exp6_reads_no0_mo_int, effects = "time")[[1]] %>%
+ce_exp6_no0_t <- conditional_effects(mod_12, effects = "time")[[1]] %>%
+  dplyr::mutate(.thr = suppressWarnings(as.numeric(as.character(.data$time)))) %>%
+  dplyr::filter(.data$.thr %in% c(2, 24)) %>%
   dplyr::transmute(
     `Time (hrs)` = time,
     `Estimate` = round(estimate__, 3),
@@ -1337,7 +2043,7 @@ ce_exp6_no0_t <- conditional_effects(mod_exp6_reads_no0_mo_int, effects = "time"
     `Upper` = round(upper__, 3)
   )
 
-ce_exp6_no0_q <- conditional_effects(mod_exp6_reads_no0_mo_int, effects = "quantity_gbv")[[1]] %>%
+ce_exp6_no0_q <- conditional_effects(mod_12, effects = "quantity_gbv")[[1]] %>%
   dplyr::transmute(
     `Quantity GVB` = quantity_gbv,
     `Estimate` = round(estimate__, 3),
@@ -1358,6 +2064,38 @@ knitr::kable(
 )
 ```
 
+**Quantity GVB = 1 — exposure times in the no–time–0 workbook, excluding **0 h** and **2 h** in the q1 fit** — **Figure 4b** and the table below use **`mo(time)`** (monotonic time). **Model comparison** lists **WAIC**; the **lower-WAIC** q1 parameterization is **`r if (nzchar(exp6_reads_no0_q1_waic_preferred_label)) exp6_reads_no0_q1_waic_preferred_label else "—"`** when fitted.
+
+```{r exp6-reads-no0-estimates-q1, echo=FALSE}
+if (exp6_reads_no0_q1_ok) {
+  ce_exp6_no0_q1_t <- conditional_effects(exp6_reads_no0_q1_plot_mod, effects = "time")[[1]] %>%
+    dplyr::mutate(.thr = suppressWarnings(as.numeric(as.character(.data$time)))) %>%
+    dplyr::filter(.data$.thr != 0) %>%
+    dplyr::transmute(
+      `Time (hrs)` = time,
+      `Estimate` = round(estimate__, 3),
+      `Lower` = round(lower__, 3),
+      `Upper` = round(upper__, 3)
+    )
+
+  knitr::kable(
+    ce_exp6_no0_q1_t,
+    caption = paste0(
+      "Experiment 6 reads (no time 0) — quantity GVB = 1, all exposure times except 2 h: ",
+      exp6_reads_no0_q1_plot_label,
+      " (monotonic; same as Figure 4b; WAIC vs factor time in Model comparison) — conditional effect of time (mean count)."
+    ),
+    format = "html"
+  )
+} else {
+  knitr::kable(
+    tibble::tibble(Note = "Not fitted: need \u2265 1 row with quantity_gbv = 1 and \u2265 2 distinct exposure times after filtering."),
+    caption = "Experiment 6 reads (no time 0) — quantity GVB = 1 (all times) — no table.",
+    format = "html"
+  )
+}
+```
+
 #### Models
 
 ```{r exp6-reads-no0-models-show, ref.label="exp6-reads-no0-models-fit", echo=TRUE, eval=FALSE}
@@ -1372,6 +2110,13 @@ knitr::kable(
   caption = "Experiment 6 reads (no time 0): WAIC (lower is better; all models include offset log(total reads)).",
   format = "html"
 )
+if (exp6_reads_no0_q1_ok) {
+  knitr::kable(
+    exp6_reads_no0_q1_waic_tbl,
+    caption = "Experiment 6 reads (no time 0) — **quantity GVB = 1** (all workbook times in q1 except **2 h**): WAIC for `mo(time)` vs factor `time` (offset log(total reads); distinct from main table above).",
+    format = "html"
+  )
+}
 ```
 
 #### Validation
@@ -1381,31 +2126,84 @@ knitr::kable(
 #| message: false
 #| fig-show: hold
 #| layout-ncol: 2
-pp_check(mod_exp6_reads_no0, ndraws = 200)
-pp_check(mod_exp6_reads_no0_mo_int, ndraws = 200)
-pp_check(mod_exp6_reads_no0_fac_add, ndraws = 200)
-pp_check(mod_exp6_reads_no0_fac_int, ndraws = 200)
+pp_check(mod_11, ndraws = 200)
+pp_check(mod_12, ndraws = 200)
+pp_check(mod_13, ndraws = 200)
+pp_check(mod_14, ndraws = 200)
+```
+
+**Quantity GVB = 1 (all exposure times)** — posterior predictive checks.
+
+```{r exp6-reads-no0-pp-check-q1}
+#| echo: false
+#| message: false
+#| fig-show: hold
+#| layout-ncol: 2
+if (exp6_reads_no0_q1_ok) {
+  pp_check(mod_15, ndraws = 200)
+  pp_check(mod_16, ndraws = 200)
+}
 ```
 
 #### Output
 
-```{r exp6-reads-no0-summary, echo=FALSE}
-summary(mod_exp6_reads_no0)
-summary(mod_exp6_reads_no0_mo_int)
-summary(mod_exp6_reads_no0_fac_add)
-summary(mod_exp6_reads_no0_fac_int)
+::: {.panel-tabset}
+
+##### mod_11
+
+```{r exp6-reads-no0-summary-base, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_11)
 ```
+
+##### mod_12
+
+```{r exp6-reads-no0-summary-mo-int, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_12)
+```
+
+##### mod_13
+
+```{r exp6-reads-no0-summary-fac-add, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_13)
+```
+
+##### mod_14
+
+```{r exp6-reads-no0-summary-fac-int, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_14)
+```
+
+##### Quantity GVB = 1 (q1)
+
+```{r exp6-reads-no0-summary-q1, echo=FALSE}
+#| class-output: model-output-panel
+if (exp6_reads_no0_q1_ok) {
+  summary(mod_15)
+  summary(mod_16)
+}
+```
+
+:::
 
 :::
 
 ## Experiment 10
 
 ```{r exp10-wrangle, include=FALSE}
-# Shared hour scale for detection (`df.10`) and reads (`df.10.reads`): Excel may use
-# `16 hours`, `1 day`, `2 days`, … or short forms `16hrs`, `1d`, …; whitespace removed + lowercased first.
+# Shared hour scale for detection (`df.10`) and reads (`df.10.reads`).
+# Reads sheets label exposure via `time` (or `exposure_time_hours` → `time` in `wrangle_exp6_reads_sheet()`).
+# Before any model fit, strings are converted to numeric hours; `df.10.reads` then sets
+# `time_hours` and rebuilds `time` as an ordered factor on that **hour** scale (for `mo(time)`).
+# Typical Experiment 10 workbook labels (after `clean_names`, values may be character or numeric):
+#   "16 hours" → 16    "1 day" → 24    "2 days" → 48    "3 days" → 72    "0" → 0
+# Short forms (`16hrs`, `1d`, …) and regex patterns for `<n> hours` / `<n> days` also work.
 exp10_time_to_hours <- function(x) {
-  xc <- trimws(as.character(x))
-  xc <- gsub("\\s+", "", xc)
+  # Excel often inserts NBSP / narrow no-break space; base trimws + \\s may miss those.
+  xc <- stringr::str_replace_all(stringr::str_trim(as.character(x)), "\\s+", "")
   xc <- tolower(xc)
   dplyr::case_when(
     xc == "" | is.na(xc) ~ NA_real_,
@@ -1444,20 +2242,32 @@ df.10.reads <- wrangle_exp6_reads_sheet(
   require_quantity_gbv = FALSE,
   require_total_reads = TRUE
 ) %>%
-  dplyr::mutate(time_hours = exp10_time_to_hours(.data$time)) %>%
+  dplyr::mutate(time_hours = exp10_time_to_hours(.data$exposure_label)) %>%
   dplyr::mutate(
     time = ordered(.data$time_hours, levels = sort(unique(stats::na.omit(.data$time_hours))))
   )
 
-df.10.reads.no0 <- wrangle_exp6_reads_sheet(
-  "analysis/data/GVB_exp10_reads_tom_no_time_0.xlsx",
-  require_quantity_gbv = FALSE,
-  require_total_reads = TRUE
-) %>%
-  dplyr::mutate(time_hours = exp10_time_to_hours(.data$time)) %>%
-  dplyr::mutate(
-    time = ordered(.data$time_hours, levels = sort(unique(stats::na.omit(.data$time_hours))))
-  )
+exp10_reads_no0_rel <- if (file.exists(here::here("analysis/data/GVB_exp10_reads_tom_no_time_0.xlsx"))) {
+  "analysis/data/GVB_exp10_reads_tom_no_time_0.xlsx"
+} else if (file.exists(here::here("analysis/data/GVB_exp10_reads_tom_no_time0.xlsx"))) {
+  "analysis/data/GVB_exp10_reads_tom_no_time0.xlsx"
+} else {
+  NA_character_
+}
+df.10.reads.no0 <- if (!is.na(exp10_reads_no0_rel)) {
+  wrangle_exp6_reads_sheet(
+    exp10_reads_no0_rel,
+    require_quantity_gbv = FALSE,
+    require_total_reads = TRUE
+  ) %>%
+    dplyr::mutate(time_hours = exp10_time_to_hours(.data$exposure_label)) %>%
+    dplyr::mutate(
+      time = ordered(.data$time_hours, levels = sort(unique(stats::na.omit(.data$time_hours))))
+    )
+} else {
+  df.10.reads %>%
+    dplyr::filter(!is.na(.data$time_hours), .data$time_hours > 0)
+}
 
 # TRUE when sequence-count workbooks include a mappable quantity column (Experiment-6-style models).
 exp10_reads_has_quantity <- "quantity_gbv" %in% names(df.10.reads)
@@ -1465,17 +2275,20 @@ exp10_reads_has_quantity <- "quantity_gbv" %in% names(df.10.reads)
 # Shared row filter for Exp 10 negative-binomial reads (matches model fitting chunks).
 # If `quantity_gbv` is absent, rows are not filtered on quantity (time-only models).
 exp10_reads_filtered_for_nb <- function(dr) {
+  dr <- dplyr::ungroup(dr)
   has_q <- "quantity_gbv" %in% names(dr)
   has_th <- "time_hours" %in% names(dr)
+  has_el <- "exposure_label" %in% names(dr)
   d <- dr %>%
     dplyr::mutate(
       gvb_sequence_number = suppressWarnings(as.integer(round(as.numeric(.data$gvb_sequence_number)))),
       total_reads = as.numeric(.data$total_reads),
-      tnum = if (has_th) {
-        suppressWarnings(as.numeric(.data$time_hours))
-      } else {
+      tnum = as.integer(round(dplyr::coalesce(
+        if (has_th) suppressWarnings(as.numeric(.data$time_hours)) else NA_real_,
+        if (has_el) exp10_time_to_hours(.data$exposure_label) else NA_real_,
+        exp10_time_to_hours(.data$time),
         suppressWarnings(as.numeric(as.character(.data$time)))
-      }
+      )))
     )
   if (has_q) {
     d <- d %>% dplyr::mutate(quantity_gbv = as.numeric(.data$quantity_gbv))
@@ -1543,13 +2356,10 @@ brief_dataframe(df.10.reads.no0)
 ```{r exp10-models-fit, include=FALSE}
 mod_formula <- bf(positive ~ mo(time) + (1|sample_id))
 
-priors <- prior(normal(0,1.5), class = b)
-
-mod.5 <- brm(
+mod_17 <- brm(
   mod_formula, family = bernoulli(link = "logit"),
-  prior = priors,
   data = df.10,
-  file = paste0(here::here("outputs/models/mod.5.Rmd")),
+  file = here::here("outputs/models", "mod_17"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   control = list(step_size = 0.01, adapt_delta = 0.99),
   backend = "cmdstanr", silent = 0, refresh = 1000,
@@ -1558,11 +2368,10 @@ mod.5 <- brm(
 
 mod_formula <- bf(positive_cut ~ mo(time) + (1|sample_id))
 
-mod.6 <- brm(
+mod_18 <- brm(
   mod_formula, family = bernoulli(link = "logit"),
-  prior = priors,
   data = df.10,
-  file = paste0(here::here("outputs/models/mod.6.Rmd")),
+  file = here::here("outputs/models", "mod_18"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   control = list(step_size = 0.01, adapt_delta = 0.99),
   backend = "cmdstanr", silent = 0, refresh = 1000,
@@ -1584,8 +2393,8 @@ waic_tbl_one_exp10 <- function(m, model_name) {
 }
 
 exp10_waic_tbl <- dplyr::bind_rows(
-  waic_tbl_one_exp10(mod.5, "mod.5 (time monotonic, no cut)"),
-  waic_tbl_one_exp10(mod.6, "mod.6 (time monotonic, cut)")
+  waic_tbl_one_exp10(mod_17, "mod_17 (time monotonic, no cut)"),
+  waic_tbl_one_exp10(mod_18, "mod_18 (time monotonic, cut)")
 ) %>%
   dplyr::arrange(WAIC, Model) %>%
   dplyr::mutate(delta_WAIC = WAIC - min(WAIC, na.rm = TRUE)) %>%
@@ -1601,8 +2410,8 @@ exp10_waic_tbl <- dplyr::bind_rows(
 
 ```{r exp10-eff, warning=FALSE, echo=FALSE, fig.width=7, fig.height=4, out.width='100%', dpi = 600}
 # Custom conditional effect plots
-c_eff_5 <- conditional_effects(mod.5)[[1]] %>% mutate(cutoff = "No")
-c_eff_6 <- conditional_effects(mod.6)[[1]] %>% mutate(cutoff = "Yes") %>% rename(positive = positive_cut)
+c_eff_5 <- conditional_effects(mod_17)[[1]] %>% mutate(cutoff = "No")
+c_eff_6 <- conditional_effects(mod_18)[[1]] %>% mutate(cutoff = "Yes") %>% rename(positive = positive_cut)
 c_eff <- rbind(c_eff_5, c_eff_6)
 
 raw_exp10_eff <- dplyr::bind_rows(
@@ -1626,12 +2435,11 @@ y_npc_exp10_eff1 <- (0.3 - y_lim_exp10_eff1[1]) / (y_lim_exp10_eff1[2] - y_lim_e
 p_exp10_eff <- c_eff %>% ggplot(aes(x = time, y = estimate__, ymin = lower__, ymax = upper__, color = cutoff)) +
   geom_jitter(
     data = raw_exp10_eff,
-    aes(x = time, y = y_plot, group = cutoff),
+    aes(x = time, y = y_plot, group = cutoff, color = cutoff),
     inherit.aes = FALSE,
     position = position_jitterdodge(jitter.width = 0.12, jitter.height = 0.03, dodge.width = -0.5),
     alpha = 0.35,
     size = 0.85,
-    color = "black",
     stroke = 0
   ) +
   geom_errorbar(position = position_dodge(width = -0.5), width = 0.3, size = 1) +
@@ -1654,7 +2462,7 @@ p_exp10_eff <- c_eff %>% ggplot(aes(x = time, y = estimate__, ymin = lower__, ym
   guides(color = guide_legend(title = "Cq cut off (> 39)", reverse = TRUE))
 
 ggplot2::ggsave(
-  filename = here::here("outputs/plots", "exp10_effect_1.png"),
+  filename = here::here("outputs/plots", "figure-05-exp10-detection-mo-time-cutoff.png"),
   plot = p_exp10_eff,
   width = knitr::opts_current$get("fig.width"),
   height = knitr::opts_current$get("fig.height"),
@@ -1664,7 +2472,7 @@ ggplot2::ggsave(
 p_exp10_eff
 ```
 
-Figure 5: Experiment 10, **monotonic time** (`mo(time)`). Conditional effect plot of GBV exposure on the probability of detection with (yes = green) and without (no = blue) a Cq cut off of 39. Black jittered points are raw binary outcomes by exposure time; error bars are 95% credible intervals and coloured points are posterior means.
+Figure 5: Conditional effect plot of GBV exposure on the probability of detection with (yes = green) and without (no = blue) a Cq cut off of 39. Jittered points are raw binary outcomes by exposure time, coloured by cutoff; error bars are 95% credible intervals and coloured points are posterior means.
 
 ## Tables
 
@@ -1672,7 +2480,7 @@ Figure 5: Experiment 10, **monotonic time** (`mo(time)`). Conditional effect plo
 # Modeled estimates from conditional effects() on the probability scale.
 
 ce10_time <- dplyr::bind_rows(
-  conditional_effects(mod.5)[[1]] %>%
+  conditional_effects(mod_17)[[1]] %>%
     mutate(cutoff = "No") %>%
     transmute(
       Cutoff = cutoff,
@@ -1681,7 +2489,7 @@ ce10_time <- dplyr::bind_rows(
       `Lower (%)` = round(lower__ * 100, 2),
       `Upper (%)` = round(upper__ * 100, 2)
     ),
-  conditional_effects(mod.6)[[1]] %>%
+  conditional_effects(mod_18)[[1]] %>%
     mutate(cutoff = "Yes") %>%
     transmute(
       Cutoff = cutoff,
@@ -1723,16 +2531,29 @@ knitr::kable(
 #| message: false
 #| fig-show: hold
 #| layout-ncol: 2
-pp_check(mod.5, ndraws = 200, col = 2)
-pp_check(mod.6, ndraws = 200, col = 2)
+pp_check(mod_17, ndraws = 200, col = 2)
+pp_check(mod_18, ndraws = 200, col = 2)
 ```
 
 ## Output
 
-```{r exp10-summary, echo=FALSE}
-summary(mod.5)
-summary(mod.6)
+::: {.panel-tabset}
+
+### mod_17
+
+```{r exp10-summary-mod5, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_17)
 ```
+
+### mod_18
+
+```{r exp10-summary-mod6, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_18)
+```
+
+:::
 
 <!-- Pairwise comparisons removed -->
 
@@ -1740,7 +2561,7 @@ summary(mod.6)
 
 pairwise_time <- dplyr::bind_rows(
   {
-    emm <- emmeans::emmeans(mod.5, ~ time, type = "response")
+    emm <- emmeans::emmeans(mod_17, ~ time, type = "response")
     pr <- emmeans::contrast(emm, method = "pairwise", adjust = "tukey")
     d <- as.data.frame(summary(pr))
     d$Cutoff <- "No"
@@ -1769,7 +2590,7 @@ pairwise_time <- dplyr::bind_rows(
       transmute(Cutoff, Contrast = contrast, `Difference (pp)`, `SE (pp)`, `p-value`)
   },
   {
-    emm <- emmeans::emmeans(mod.6, ~ time, type = "response")
+    emm <- emmeans::emmeans(mod_18, ~ time, type = "response")
     pr <- emmeans::contrast(emm, method = "pairwise", adjust = "tukey")
     d <- as.data.frame(summary(pr))
     d$Cutoff <- "Yes"
@@ -1810,8 +2631,6 @@ knitr::kable(
 
 ### GVB sequence counts - reads
 
-Negative binomial models on **`GVB_exp10_reads_tom.xlsx`** (`df.10.reads`): **`gvb_sequence_number`** with **`offset(log(total_reads))`**. If the sheet has **`quantity_gbv`** (or an alias **`wrangle_exp6_reads_sheet()`** recognizes), models match Experiment 6 (monotonic time × quantity + factor alternatives). Otherwise only **time** is modeled: **`mo(time)`** vs **factor `time`**. Exposure times use **`exp10_time_to_hours()`** (e.g. **1d → 24**). Rows require **`total_reads > 0`**; when present, **`quantity_gbv ≠ 0`**.
-
 ::: {.panel-tabset}
 
 ```{r exp10-reads-models-fit, include=FALSE}
@@ -1819,10 +2638,16 @@ if (exp10_reads_has_quantity) {
   d10r <- exp10_reads_filtered_for_nb(df.10.reads)
   t10_lv <- sort(unique(stats::na.omit(d10r$tnum)))
   if (length(t10_lv) < 2L) {
+    uel <- if ("exposure_label" %in% names(df.10.reads)) {
+      paste(utils::head(unique(df.10.reads$exposure_label), 20L), collapse = " | ")
+    } else {
+      "(no exposure_label column)"
+    }
     stop(
       "Experiment 10 reads: need ≥ 2 time levels after filtering (quantity GVB, total reads). Found: ",
       paste(t10_lv, collapse = ", "),
-      " (nrow = ", nrow(d10r), "). Check `time`/`time_hours` in the workbook and filters on total_reads / gvb_sequence_number."
+      " (nrow = ", nrow(d10r), "). Unique exposure_label (raw, up to 20): ", uel,
+      ". Check Exposure column mapping, Unicode spaces, and filters on total_reads / gvb_sequence_number."
     )
   }
   qty10_lv <- sort(unique(stats::na.omit(d10r$quantity_gbv)))
@@ -1833,19 +2658,20 @@ if (exp10_reads_has_quantity) {
     ) %>%
     dplyr::select(-tnum)
 
-  qty_fac_lv_exp10_reads <- levels(df_exp10_reads_mod$quantity_gbv)
-  df_exp10_reads_fac <- df_exp10_reads_mod %>%
+  # Do not use as.numeric(time) on ordered factors: that returns level indices (1,2,…) not hour values.
+  df_exp10_reads_fac <- d10r %>%
     dplyr::mutate(
-      time = factor(as.character(as.numeric(.data$time)), levels = as.character(t10_lv)),
-      quantity_gbv = factor(as.character(as.numeric(.data$quantity_gbv)), levels = as.character(qty_fac_lv_exp10_reads))
-    )
+      time = factor(as.character(.data$tnum), levels = as.character(t10_lv)),
+      quantity_gbv = factor(as.character(.data$quantity_gbv), levels = as.character(qty10_lv))
+    ) %>%
+    dplyr::select(-tnum)
 
   mod_formula <- bf(gvb_sequence_number ~ mo(time) + mo(quantity_gbv) + offset(log(total_reads)))
 
-  mod_exp10_reads <- brm(
+  mod_19 <- brm(
     mod_formula, family = negbinomial(),
     data = df_exp10_reads_mod,
-    file = paste0(here::here("outputs/models/mod_exp10_reads_gvbseq_negbin_offset")),
+    file = here::here("outputs/models", "mod_19"),
     threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
     control = list(step_size = 0.01, adapt_delta = 0.99),
     backend = "cmdstanr", silent = 0, refresh = 1000,
@@ -1854,10 +2680,10 @@ if (exp10_reads_has_quantity) {
 
   mod_formula <- bf(gvb_sequence_number ~ mo(time) * mo(quantity_gbv) + offset(log(total_reads)))
 
-  mod_exp10_reads_mo_int <- brm(
+  mod_20 <- brm(
     mod_formula, family = negbinomial(),
     data = df_exp10_reads_mod,
-    file = paste0(here::here("outputs/models/mod_exp10_reads_mo_interact_offset")),
+    file = here::here("outputs/models", "mod_20"),
     threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
     control = list(step_size = 0.01, adapt_delta = 0.99),
     backend = "cmdstanr", silent = 0, refresh = 1000,
@@ -1866,10 +2692,10 @@ if (exp10_reads_has_quantity) {
 
   mod_formula <- bf(gvb_sequence_number ~ time + quantity_gbv + offset(log(total_reads)))
 
-  mod_exp10_reads_fac_add <- brm(
+  mod_21 <- brm(
     mod_formula, family = negbinomial(),
     data = df_exp10_reads_fac,
-    file = paste0(here::here("outputs/models/mod_exp10_reads_fac_add_offset")),
+    file = here::here("outputs/models", "mod_21"),
     threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
     control = list(step_size = 0.01, adapt_delta = 0.99),
     backend = "cmdstanr", silent = 0, refresh = 1000,
@@ -1878,10 +2704,10 @@ if (exp10_reads_has_quantity) {
 
   mod_formula <- bf(gvb_sequence_number ~ time * quantity_gbv + offset(log(total_reads)))
 
-  mod_exp10_reads_fac_int <- brm(
+  mod_22 <- brm(
     mod_formula, family = negbinomial(),
     data = df_exp10_reads_fac,
-    file = paste0(here::here("outputs/models/mod_exp10_reads_fac_int_offset")),
+    file = here::here("outputs/models", "mod_22"),
     threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
     control = list(step_size = 0.01, adapt_delta = 0.99),
     backend = "cmdstanr", silent = 0, refresh = 1000,
@@ -1891,48 +2717,54 @@ if (exp10_reads_has_quantity) {
   d10r <- exp10_reads_filtered_for_nb(df.10.reads)
   t10_lv <- sort(unique(stats::na.omit(d10r$tnum)))
   if (length(t10_lv) < 2L) {
+    uel <- if ("exposure_label" %in% names(df.10.reads)) {
+      paste(utils::head(unique(df.10.reads$exposure_label), 20L), collapse = " | ")
+    } else {
+      "(no exposure_label column)"
+    }
     stop(
       "Experiment 10 reads: need ≥ 2 distinct time levels after filtering (total reads, counts). Found: ",
       paste(t10_lv, collapse = ", "),
-      " (nrow = ", nrow(d10r), "). Check `time`/`time_hours` in the workbook and filters on total_reads / gvb_sequence_number."
+      " (nrow = ", nrow(d10r), "). Unique exposure_label (raw, up to 20): ", uel,
+      ". Check Exposure column mapping in `wrangle_exp6_reads_sheet()`, Unicode spaces in cells, ",
+      "and filters on total_reads / gvb_sequence_number."
     )
   }
   df_exp10_reads_mod <- d10r %>%
     dplyr::mutate(time = ordered(.data$tnum, levels = t10_lv)) %>%
     dplyr::select(-tnum)
 
-  df_exp10_reads_fac <- df_exp10_reads_mod %>%
-    dplyr::mutate(
-      time = factor(as.character(as.numeric(.data$time)), levels = as.character(t10_lv))
-    )
+  df_exp10_reads_fac <- d10r %>%
+    dplyr::mutate(time = factor(as.character(.data$tnum), levels = as.character(t10_lv))) %>%
+    dplyr::select(-tnum)
 
   mod_formula <- bf(gvb_sequence_number ~ mo(time) + offset(log(total_reads)))
 
-  mod_exp10_reads <- brm(
+  mod_19 <- brm(
     mod_formula, family = negbinomial(),
     data = df_exp10_reads_mod,
-    file = paste0(here::here("outputs/models/mod_exp10_reads_mo_time_offset")),
+    file = here::here("outputs/models", "mod_19"),
     threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
     control = list(step_size = 0.01, adapt_delta = 0.99),
     backend = "cmdstanr", silent = 0, refresh = 1000,
     chains = 4, cores = 4, warmup = 2000, iter = 4000
   )
 
-  mod_exp10_reads_mo_int <- mod_exp10_reads
+  mod_20 <- mod_19
 
   mod_formula <- bf(gvb_sequence_number ~ time + offset(log(total_reads)))
 
-  mod_exp10_reads_fac_add <- brm(
+  mod_21 <- brm(
     mod_formula, family = negbinomial(),
     data = df_exp10_reads_fac,
-    file = paste0(here::here("outputs/models/mod_exp10_reads_fac_time_offset")),
+    file = here::here("outputs/models", "mod_21"),
     threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
     control = list(step_size = 0.01, adapt_delta = 0.99),
     backend = "cmdstanr", silent = 0, refresh = 1000,
     chains = 4, cores = 4, warmup = 2000, iter = 4000
   )
 
-  mod_exp10_reads_fac_int <- mod_exp10_reads_fac_add
+  mod_22 <- mod_21
 }
 ```
 
@@ -1951,10 +2783,10 @@ waic_tbl_one_exp10_reads <- function(m, model_name) {
 
 if (exp10_reads_has_quantity) {
   exp10_reads_waic_tbl <- dplyr::bind_rows(
-    waic_tbl_one_exp10_reads(mod_exp10_reads, "mo(time) + mo(quantity_gbv)"),
-    waic_tbl_one_exp10_reads(mod_exp10_reads_mo_int, "mo(time) * mo(quantity_gbv)"),
-    waic_tbl_one_exp10_reads(mod_exp10_reads_fac_add, "time + quantity_gbv (factor)"),
-    waic_tbl_one_exp10_reads(mod_exp10_reads_fac_int, "time * quantity_gbv (factor)")
+    waic_tbl_one_exp10_reads(mod_19, "mo(time) + mo(quantity_gbv)"),
+    waic_tbl_one_exp10_reads(mod_20, "mo(time) * mo(quantity_gbv)"),
+    waic_tbl_one_exp10_reads(mod_21, "time + quantity_gbv (factor)"),
+    waic_tbl_one_exp10_reads(mod_22, "time * quantity_gbv (factor)")
   ) %>%
     dplyr::arrange(WAIC) %>%
     dplyr::mutate(delta_WAIC = WAIC - min(WAIC, na.rm = TRUE)) %>%
@@ -1966,8 +2798,8 @@ if (exp10_reads_has_quantity) {
     dplyr::select(Model, WAIC, SE, delta_WAIC)
 } else {
   exp10_reads_waic_tbl <- dplyr::bind_rows(
-    waic_tbl_one_exp10_reads(mod_exp10_reads, "mo(time)"),
-    waic_tbl_one_exp10_reads(mod_exp10_reads_fac_add, "time (factor)")
+    waic_tbl_one_exp10_reads(mod_19, "mo(time)"),
+    waic_tbl_one_exp10_reads(mod_21, "time (factor)")
   ) %>%
     dplyr::arrange(WAIC) %>%
     dplyr::mutate(delta_WAIC = WAIC - min(WAIC, na.rm = TRUE)) %>%
@@ -1994,7 +2826,7 @@ leg_npc_exp10_f3 <- c(
 )
 
 if (exp10_reads_has_quantity) {
-  ce_both <- conditional_effects(mod_exp10_reads_mo_int, effects = "time:quantity_gbv")[[1]]
+  ce_both <- conditional_effects(mod_20, effects = "time:quantity_gbv")[[1]]
   qty_lv <- sort(unique(as.numeric(as.character(ce_both$quantity_gbv))))
   ce_both <- ce_both %>%
     dplyr::mutate(
@@ -2069,9 +2901,9 @@ if (exp10_reads_has_quantity) {
     ggplot2::labs(x = "GVB exposure (hrs)", y = "GVB sequence number") +
     ggplot2::guides(color = ggplot2::guide_legend(title = "GVB quantity", reverse = TRUE))
 
-  fn_exp10_reads_plot <- here::here("outputs/plots", "exp10_reads_effect_time_by_quantity.png")
+  fn_exp10_reads_plot <- here::here("outputs/plots", "figure-06-exp10-reads-time-by-quantity.png")
 } else {
-  ce_time <- conditional_effects(mod_exp10_reads, effects = "time")[[1]] %>%
+  ce_time <- conditional_effects(mod_19, effects = "time")[[1]] %>%
     dplyr::mutate(xtime = as.numeric(.data$time))
 
   raw_col <- raw %>%
@@ -2118,7 +2950,7 @@ if (exp10_reads_has_quantity) {
     exp10_reads_plot_theme +
     ggplot2::labs(x = "GVB exposure (hrs)", y = "GVB sequence number")
 
-  fn_exp10_reads_plot <- here::here("outputs/plots", "exp10_reads_effect_time.png")
+  fn_exp10_reads_plot <- here::here("outputs/plots", "figure-06-exp10-reads-time-only.png")
 }
 
 ggplot2::ggsave(
@@ -2134,9 +2966,9 @@ p_exp10_reads_eff
 
 ```{r exp10-reads-fig6-caption, echo=FALSE, results="asis"}
 if (exp10_reads_has_quantity) {
-  cat("Figure 6: Experiment 10, **GVB sequence counts** (reads workbook). Conditional effect of GVB exposure on mean sequence count by GVB quantity under **`mo(time) × mo(quantity)`** with **`offset(log(total_reads))`**. Vertical axis is **log(1 + count)** (lower limit slightly below zero). Jittered points are raw counts; error bars are 95% credible intervals and coloured points are posterior means.\n\n")
+  cat("Figure 6: GVB sequence counts from the reads workbook. Conditional effect of GVB exposure on mean sequence count by GVB quantity. Vertical axis is log(1 + count). Jittered points are raw counts; error bars are 95% credible intervals and coloured points are posterior means.\n\n")
 } else {
-  cat("Figure 6: Experiment 10, **GVB sequence counts** (reads workbook). Conditional effect of GVB exposure on mean sequence count from **`mo(time)`** with **`offset(log(total_reads))`** (no **quantity GVB** column in this sheet). Vertical axis is **log(1 + count)** (lower limit slightly below zero). Grey jittered points are raw counts; blue error bars and points are 95% credible intervals and posterior means.\n\n")
+  cat("Figure 6: GVB sequence counts from the reads workbook. Conditional effect of GVB exposure on mean sequence count. Vertical axis is log(1 + count). Grey jittered points are raw counts; blue error bars and points are 95% credible intervals and posterior means.\n\n")
 }
 ```
 
@@ -2144,7 +2976,7 @@ if (exp10_reads_has_quantity) {
 
 ```{r exp10-reads-estimates, echo=FALSE}
 if (exp10_reads_has_quantity) {
-  ce_exp10_t <- conditional_effects(mod_exp10_reads_mo_int, effects = "time")[[1]] %>%
+  ce_exp10_t <- conditional_effects(mod_20, effects = "time")[[1]] %>%
     dplyr::transmute(
       `Time (hrs)` = time,
       `Estimate` = round(estimate__, 3),
@@ -2152,7 +2984,7 @@ if (exp10_reads_has_quantity) {
       `Upper` = round(upper__, 3)
     )
 
-  ce_exp10_q <- conditional_effects(mod_exp10_reads_mo_int, effects = "quantity_gbv")[[1]] %>%
+  ce_exp10_q <- conditional_effects(mod_20, effects = "quantity_gbv")[[1]] %>%
     dplyr::transmute(
       `Quantity GVB` = quantity_gbv,
       `Estimate` = round(estimate__, 3),
@@ -2172,7 +3004,7 @@ if (exp10_reads_has_quantity) {
     format = "html"
   )
 } else {
-  ce_exp10_t <- conditional_effects(mod_exp10_reads, effects = "time")[[1]] %>%
+  ce_exp10_t <- conditional_effects(mod_19, effects = "time")[[1]] %>%
     dplyr::transmute(
       `Time (hrs)` = time,
       `Estimate` = round(estimate__, 3),
@@ -2212,29 +3044,49 @@ knitr::kable(
 #| fig-show: hold
 #| layout-ncol: 2
 if (exp10_reads_has_quantity) {
-  pp_check(mod_exp10_reads, ndraws = 200)
-  pp_check(mod_exp10_reads_mo_int, ndraws = 200)
-  pp_check(mod_exp10_reads_fac_add, ndraws = 200)
-  pp_check(mod_exp10_reads_fac_int, ndraws = 200)
+  pp_check(mod_19, ndraws = 200)
+  pp_check(mod_20, ndraws = 200)
+  pp_check(mod_21, ndraws = 200)
+  pp_check(mod_22, ndraws = 200)
 } else {
-  pp_check(mod_exp10_reads, ndraws = 200)
-  pp_check(mod_exp10_reads_fac_add, ndraws = 200)
+  pp_check(mod_19, ndraws = 200)
+  pp_check(mod_21, ndraws = 200)
 }
 ```
 
 #### Output
 
-```{r exp10-reads-summary, echo=FALSE}
-if (exp10_reads_has_quantity) {
-  summary(mod_exp10_reads)
-  summary(mod_exp10_reads_mo_int)
-  summary(mod_exp10_reads_fac_add)
-  summary(mod_exp10_reads_fac_int)
-} else {
-  summary(mod_exp10_reads)
-  summary(mod_exp10_reads_fac_add)
-}
+::: {.panel-tabset}
+
+##### mod_19
+
+```{r exp10-reads-summary-base, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_19)
 ```
+
+##### mod_20
+
+```{r exp10-reads-summary-mo-int, echo=FALSE}
+#| class-output: model-output-panel
+if (exp10_reads_has_quantity) summary(mod_20)
+```
+
+##### mod_21
+
+```{r exp10-reads-summary-fac-add, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_21)
+```
+
+##### mod_22
+
+```{r exp10-reads-summary-fac-int, echo=FALSE}
+#| class-output: model-output-panel
+if (exp10_reads_has_quantity) summary(mod_22)
+```
+
+:::
 
 :::
 
@@ -2247,10 +3099,15 @@ if (exp10_reads_has_quantity) {
   d10rn0 <- exp10_reads_filtered_for_nb(df.10.reads.no0)
   t10n0_lv <- sort(unique(stats::na.omit(d10rn0$tnum)))
   if (length(t10n0_lv) < 2L) {
+    uel_n0 <- if ("exposure_label" %in% names(df.10.reads.no0)) {
+      paste(utils::head(unique(df.10.reads.no0$exposure_label), 20L), collapse = " | ")
+    } else {
+      "(no exposure_label column)"
+    }
     stop(
       "Experiment 10 reads (no time 0): need ≥ 2 time levels after filtering. Found: ",
       paste(t10n0_lv, collapse = ", "),
-      " (nrow = ", nrow(d10rn0), ")."
+      " (nrow = ", nrow(d10rn0), "). Unique exposure_label (raw, up to 20): ", uel_n0, "."
     )
   }
   qty10n0_lv <- sort(unique(stats::na.omit(d10rn0$quantity_gbv)))
@@ -2261,19 +3118,19 @@ if (exp10_reads_has_quantity) {
     ) %>%
     dplyr::select(-tnum)
 
-  qty_fac_lv_exp10_no0 <- levels(df_exp10_reads_no0_mod$quantity_gbv)
-  df_exp10_reads_no0_fac <- df_exp10_reads_no0_mod %>%
+  df_exp10_reads_no0_fac <- d10rn0 %>%
     dplyr::mutate(
-      time = factor(as.character(as.numeric(.data$time)), levels = as.character(t10n0_lv)),
-      quantity_gbv = factor(as.character(as.numeric(.data$quantity_gbv)), levels = as.character(qty_fac_lv_exp10_no0))
-    )
+      time = factor(as.character(.data$tnum), levels = as.character(t10n0_lv)),
+      quantity_gbv = factor(as.character(.data$quantity_gbv), levels = as.character(qty10n0_lv))
+    ) %>%
+    dplyr::select(-tnum)
 
   mod_formula <- bf(gvb_sequence_number ~ mo(time) + mo(quantity_gbv) + offset(log(total_reads)))
 
-  mod_exp10_reads_no0 <- brm(
+  mod_23 <- brm(
     mod_formula, family = negbinomial(),
     data = df_exp10_reads_no0_mod,
-    file = paste0(here::here("outputs/models/mod_exp10_reads_no0_gvbseq_negbin_offset")),
+    file = here::here("outputs/models", "mod_23"),
     threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
     control = list(step_size = 0.01, adapt_delta = 0.99),
     backend = "cmdstanr", silent = 0, refresh = 1000,
@@ -2282,10 +3139,10 @@ if (exp10_reads_has_quantity) {
 
   mod_formula <- bf(gvb_sequence_number ~ mo(time) * mo(quantity_gbv) + offset(log(total_reads)))
 
-  mod_exp10_reads_no0_mo_int <- brm(
+  mod_24 <- brm(
     mod_formula, family = negbinomial(),
     data = df_exp10_reads_no0_mod,
-    file = paste0(here::here("outputs/models/mod_exp10_reads_no0_mo_interact_offset")),
+    file = here::here("outputs/models", "mod_24"),
     threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
     control = list(step_size = 0.01, adapt_delta = 0.99),
     backend = "cmdstanr", silent = 0, refresh = 1000,
@@ -2294,10 +3151,10 @@ if (exp10_reads_has_quantity) {
 
   mod_formula <- bf(gvb_sequence_number ~ time + quantity_gbv + offset(log(total_reads)))
 
-  mod_exp10_reads_no0_fac_add <- brm(
+  mod_25 <- brm(
     mod_formula, family = negbinomial(),
     data = df_exp10_reads_no0_fac,
-    file = paste0(here::here("outputs/models/mod_exp10_reads_no0_fac_add_offset")),
+    file = here::here("outputs/models", "mod_25"),
     threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
     control = list(step_size = 0.01, adapt_delta = 0.99),
     backend = "cmdstanr", silent = 0, refresh = 1000,
@@ -2306,10 +3163,10 @@ if (exp10_reads_has_quantity) {
 
   mod_formula <- bf(gvb_sequence_number ~ time * quantity_gbv + offset(log(total_reads)))
 
-  mod_exp10_reads_no0_fac_int <- brm(
+  mod_26 <- brm(
     mod_formula, family = negbinomial(),
     data = df_exp10_reads_no0_fac,
-    file = paste0(here::here("outputs/models/mod_exp10_reads_no0_fac_int_offset")),
+    file = here::here("outputs/models", "mod_26"),
     threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
     control = list(step_size = 0.01, adapt_delta = 0.99),
     backend = "cmdstanr", silent = 0, refresh = 1000,
@@ -2319,48 +3176,52 @@ if (exp10_reads_has_quantity) {
   d10rn0 <- exp10_reads_filtered_for_nb(df.10.reads.no0)
   t10n0_lv <- sort(unique(stats::na.omit(d10rn0$tnum)))
   if (length(t10n0_lv) < 2L) {
+    uel_n0 <- if ("exposure_label" %in% names(df.10.reads.no0)) {
+      paste(utils::head(unique(df.10.reads.no0$exposure_label), 20L), collapse = " | ")
+    } else {
+      "(no exposure_label column)"
+    }
     stop(
       "Experiment 10 reads (no time 0): need ≥ 2 time levels after filtering. Found: ",
       paste(t10n0_lv, collapse = ", "),
-      " (nrow = ", nrow(d10rn0), ")."
+      " (nrow = ", nrow(d10rn0), "). Unique exposure_label (raw, up to 20): ", uel_n0, "."
     )
   }
   df_exp10_reads_no0_mod <- d10rn0 %>%
     dplyr::mutate(time = ordered(.data$tnum, levels = t10n0_lv)) %>%
     dplyr::select(-tnum)
 
-  df_exp10_reads_no0_fac <- df_exp10_reads_no0_mod %>%
-    dplyr::mutate(
-      time = factor(as.character(as.numeric(.data$time)), levels = as.character(t10n0_lv))
-    )
+  df_exp10_reads_no0_fac <- d10rn0 %>%
+    dplyr::mutate(time = factor(as.character(.data$tnum), levels = as.character(t10n0_lv))) %>%
+    dplyr::select(-tnum)
 
   mod_formula <- bf(gvb_sequence_number ~ mo(time) + offset(log(total_reads)))
 
-  mod_exp10_reads_no0 <- brm(
+  mod_23 <- brm(
     mod_formula, family = negbinomial(),
     data = df_exp10_reads_no0_mod,
-    file = paste0(here::here("outputs/models/mod_exp10_reads_no0_mo_time_offset")),
+    file = here::here("outputs/models", "mod_23"),
     threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
     control = list(step_size = 0.01, adapt_delta = 0.99),
     backend = "cmdstanr", silent = 0, refresh = 1000,
     chains = 4, cores = 4, warmup = 2000, iter = 4000
   )
 
-  mod_exp10_reads_no0_mo_int <- mod_exp10_reads_no0
+  mod_24 <- mod_23
 
   mod_formula <- bf(gvb_sequence_number ~ time + offset(log(total_reads)))
 
-  mod_exp10_reads_no0_fac_add <- brm(
+  mod_25 <- brm(
     mod_formula, family = negbinomial(),
     data = df_exp10_reads_no0_fac,
-    file = paste0(here::here("outputs/models/mod_exp10_reads_no0_fac_time_offset")),
+    file = here::here("outputs/models", "mod_25"),
     threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
     control = list(step_size = 0.01, adapt_delta = 0.99),
     backend = "cmdstanr", silent = 0, refresh = 1000,
     chains = 4, cores = 4, warmup = 2000, iter = 4000
   )
 
-  mod_exp10_reads_no0_fac_int <- mod_exp10_reads_no0_fac_add
+  mod_26 <- mod_25
 }
 ```
 
@@ -2379,10 +3240,10 @@ waic_tbl_one_exp10_reads_no0 <- function(m, model_name) {
 
 if (exp10_reads_has_quantity) {
   exp10_reads_no0_waic_tbl <- dplyr::bind_rows(
-    waic_tbl_one_exp10_reads_no0(mod_exp10_reads_no0, "mo(time) + mo(quantity_gbv)"),
-    waic_tbl_one_exp10_reads_no0(mod_exp10_reads_no0_mo_int, "mo(time) * mo(quantity_gbv)"),
-    waic_tbl_one_exp10_reads_no0(mod_exp10_reads_no0_fac_add, "time + quantity_gbv (factor)"),
-    waic_tbl_one_exp10_reads_no0(mod_exp10_reads_no0_fac_int, "time * quantity_gbv (factor)")
+    waic_tbl_one_exp10_reads_no0(mod_23, "mo(time) + mo(quantity_gbv)"),
+    waic_tbl_one_exp10_reads_no0(mod_24, "mo(time) * mo(quantity_gbv)"),
+    waic_tbl_one_exp10_reads_no0(mod_25, "time + quantity_gbv (factor)"),
+    waic_tbl_one_exp10_reads_no0(mod_26, "time * quantity_gbv (factor)")
   ) %>%
     dplyr::arrange(WAIC) %>%
     dplyr::mutate(delta_WAIC = WAIC - min(WAIC, na.rm = TRUE)) %>%
@@ -2394,8 +3255,8 @@ if (exp10_reads_has_quantity) {
     dplyr::select(Model, WAIC, SE, delta_WAIC)
 } else {
   exp10_reads_no0_waic_tbl <- dplyr::bind_rows(
-    waic_tbl_one_exp10_reads_no0(mod_exp10_reads_no0, "mo(time)"),
-    waic_tbl_one_exp10_reads_no0(mod_exp10_reads_no0_fac_add, "time (factor)")
+    waic_tbl_one_exp10_reads_no0(mod_23, "mo(time)"),
+    waic_tbl_one_exp10_reads_no0(mod_25, "time (factor)")
   ) %>%
     dplyr::arrange(WAIC) %>%
     dplyr::mutate(delta_WAIC = WAIC - min(WAIC, na.rm = TRUE)) %>%
@@ -2413,11 +3274,13 @@ if (exp10_reads_has_quantity) {
 ```{r exp10-reads-no0-eff, warning=FALSE, echo=FALSE, fig.width=8, fig.height=4.5, out.width="100%", dpi=600}
 raw_no0 <- df_exp10_reads_no0_mod
 n_t_exp10_n0 <- length(t10n0_lv)
-xlim_exp10_n0 <- exp10_reads_xlim_for_n(n_t_exp10_n0)
-x_lab_exp10_n0 <- as.character(t10n0_lv)
+# Include 0 h on the x-axis (no estimate; model excludes time 0).
+n_t_exp10_n0_plot <- n_t_exp10_n0 + 1L
+xlim_exp10_n0 <- exp10_reads_xlim_for_n(n_t_exp10_n0_plot)
+x_lab_exp10_n0 <- c("0", as.character(t10n0_lv))
 
 if (exp10_reads_has_quantity) {
-  ce_both_no0 <- conditional_effects(mod_exp10_reads_no0_mo_int, effects = "time:quantity_gbv")[[1]]
+  ce_both_no0 <- conditional_effects(mod_24, effects = "time:quantity_gbv")[[1]]
   qty_lv_no0 <- sort(unique(as.numeric(as.character(ce_both_no0$quantity_gbv))))
   ce_both_no0 <- ce_both_no0 %>%
     dplyr::mutate(
@@ -2425,14 +3288,14 @@ if (exp10_reads_has_quantity) {
     ) %>%
     dplyr::mutate(
       tord = suppressWarnings(as.numeric(as.character(.data$time))),
-      xtime = as.numeric(.data$time)
+      xtime = as.numeric(.data$time) + 1
     ) %>%
     dplyr::arrange(.data$quantity_gbv, .data$tord)
 
   raw_col_no0 <- raw_no0 %>%
     dplyr::mutate(
       quantity_gbv = factor(as.character(.data$quantity_gbv), levels = levels(ce_both_no0$quantity_gbv)),
-      xtime = as.numeric(.data$time) + exp10_reads_fig_x_nudge_raw
+      xtime = as.numeric(.data$time) + 1 + exp10_reads_fig_x_nudge_raw
     )
 
   exp10_reads_fig_y_max_no0 <- max(
@@ -2449,7 +3312,7 @@ if (exp10_reads_has_quantity) {
   )
   exp10_reads_y_breaks_use_no0 <- exp10_reads_y_breaks[exp10_reads_y_breaks <= exp10_reads_fig_y_upper_no0]
   exp10_reads_fig_legend_npc_no0 <- c(
-    x = (n_t_exp10_n0 - xlim_exp10_n0[1]) / diff(xlim_exp10_n0),
+    x = (n_t_exp10_n0_plot - xlim_exp10_n0[1]) / diff(xlim_exp10_n0),
     y = log1p(10) / log1p(exp10_reads_fig_y_upper_no0)
   )
 
@@ -2493,7 +3356,7 @@ if (exp10_reads_has_quantity) {
     ggplot2::geom_point(position = ce_pd_no0, size = 2.5, alpha = 0.9) +
     ggplot2::scale_color_manual(values = pal_no0) +
     ggplot2::scale_x_continuous(
-      breaks = seq_len(n_t_exp10_n0),
+      breaks = seq_len(n_t_exp10_n0_plot),
       labels = x_lab_exp10_n0,
       limits = xlim_exp10_n0,
       expand = c(0, 0)
@@ -2510,13 +3373,13 @@ if (exp10_reads_has_quantity) {
     ggplot2::labs(x = "GVB exposure (hrs)", y = "GVB sequence number") +
     ggplot2::guides(color = ggplot2::guide_legend(title = "GVB quantity", reverse = TRUE))
 
-  fn_exp10_no0_plot <- here::here("outputs/plots", "exp10_reads_no0_effect_time_by_quantity.png")
+  fn_exp10_no0_plot <- here::here("outputs/plots", "figure-07-exp10-reads-no0-time-by-quantity.png")
 } else {
-  ce_both_no0 <- conditional_effects(mod_exp10_reads_no0, effects = "time")[[1]] %>%
-    dplyr::mutate(xtime = as.numeric(.data$time))
+  ce_both_no0 <- conditional_effects(mod_23, effects = "time")[[1]] %>%
+    dplyr::mutate(xtime = as.numeric(.data$time) + 1)
 
   raw_col_no0 <- raw_no0 %>%
-    dplyr::mutate(xtime = as.numeric(.data$time) + exp10_reads_fig_x_nudge_raw)
+    dplyr::mutate(xtime = as.numeric(.data$time) + 1 + exp10_reads_fig_x_nudge_raw)
 
   exp10_reads_fig_y_max_no0 <- max(
     0,
@@ -2557,7 +3420,7 @@ if (exp10_reads_has_quantity) {
     ggplot2::geom_errorbar(width = 0.12, linewidth = 0.9, color = col_mu_n0) +
     ggplot2::geom_point(size = 2.5, alpha = 0.9, color = col_mu_n0) +
     ggplot2::scale_x_continuous(
-      breaks = seq_len(n_t_exp10_n0),
+      breaks = seq_len(n_t_exp10_n0_plot),
       labels = x_lab_exp10_n0,
       limits = xlim_exp10_n0,
       expand = c(0, 0)
@@ -2573,7 +3436,7 @@ if (exp10_reads_has_quantity) {
     exp10_reads_plot_theme_no0 +
     ggplot2::labs(x = "GVB exposure (hrs)", y = "GVB sequence number")
 
-  fn_exp10_no0_plot <- here::here("outputs/plots", "exp10_reads_no0_effect_time.png")
+  fn_exp10_no0_plot <- here::here("outputs/plots", "figure-07-exp10-reads-no0-time-only.png")
 }
 
 ggplot2::ggsave(
@@ -2589,9 +3452,9 @@ p_exp10_reads_no0_eff
 
 ```{r exp10-reads-fig7-caption, echo=FALSE, results="asis"}
 if (exp10_reads_has_quantity) {
-  cat("Figure 7: Experiment 10, **GVB sequence counts** (reads workbook without time 0). Same design as Figure 6. Source workbook **`GVB_exp10_reads_tom_no_time0.xlsx`** omits 0 h exposure rows where applicable.\n\n")
+  cat("Figure 7: GVB sequence counts with 0 h exposure excluded; same layout as Figure 6. Conditional effect of GVB exposure on mean sequence count by GVB quantity. Vertical axis is log(1 + count). Jittered points are raw counts; error bars are 95% credible intervals and coloured points are posterior means.\n\n")
 } else {
-  cat("Figure 7: Experiment 10, **GVB sequence counts** (no time 0 workbook). **`mo(time)`** and **`offset(log(total_reads))`** (no quantity column). Same plotting style as Figure 6 time-only panel.\n\n")
+  cat("Figure 7: GVB sequence counts with 0 h exposure excluded; same layout as Figure 6. Conditional effect of GVB exposure on mean sequence count. Vertical axis is log(1 + count). Grey jittered points are raw counts; blue error bars and points are 95% credible intervals and posterior means.\n\n")
 }
 ```
 
@@ -2599,7 +3462,7 @@ if (exp10_reads_has_quantity) {
 
 ```{r exp10-reads-no0-estimates, echo=FALSE}
 if (exp10_reads_has_quantity) {
-  ce_exp10_no0_t <- conditional_effects(mod_exp10_reads_no0_mo_int, effects = "time")[[1]] %>%
+  ce_exp10_no0_t <- conditional_effects(mod_24, effects = "time")[[1]] %>%
     dplyr::transmute(
       `Time (hrs)` = time,
       `Estimate` = round(estimate__, 3),
@@ -2607,7 +3470,7 @@ if (exp10_reads_has_quantity) {
       `Upper` = round(upper__, 3)
     )
 
-  ce_exp10_no0_q <- conditional_effects(mod_exp10_reads_no0_mo_int, effects = "quantity_gbv")[[1]] %>%
+  ce_exp10_no0_q <- conditional_effects(mod_24, effects = "quantity_gbv")[[1]] %>%
     dplyr::transmute(
       `Quantity GVB` = quantity_gbv,
       `Estimate` = round(estimate__, 3),
@@ -2627,7 +3490,7 @@ if (exp10_reads_has_quantity) {
     format = "html"
   )
 } else {
-  ce_exp10_no0_t <- conditional_effects(mod_exp10_reads_no0, effects = "time")[[1]] %>%
+  ce_exp10_no0_t <- conditional_effects(mod_23, effects = "time")[[1]] %>%
     dplyr::transmute(
       `Time (hrs)` = time,
       `Estimate` = round(estimate__, 3),
@@ -2667,29 +3530,49 @@ knitr::kable(
 #| fig-show: hold
 #| layout-ncol: 2
 if (exp10_reads_has_quantity) {
-  pp_check(mod_exp10_reads_no0, ndraws = 200)
-  pp_check(mod_exp10_reads_no0_mo_int, ndraws = 200)
-  pp_check(mod_exp10_reads_no0_fac_add, ndraws = 200)
-  pp_check(mod_exp10_reads_no0_fac_int, ndraws = 200)
+  pp_check(mod_23, ndraws = 200)
+  pp_check(mod_24, ndraws = 200)
+  pp_check(mod_25, ndraws = 200)
+  pp_check(mod_26, ndraws = 200)
 } else {
-  pp_check(mod_exp10_reads_no0, ndraws = 200)
-  pp_check(mod_exp10_reads_no0_fac_add, ndraws = 200)
+  pp_check(mod_23, ndraws = 200)
+  pp_check(mod_25, ndraws = 200)
 }
 ```
 
 #### Output
 
-```{r exp10-reads-no0-summary, echo=FALSE}
-if (exp10_reads_has_quantity) {
-  summary(mod_exp10_reads_no0)
-  summary(mod_exp10_reads_no0_mo_int)
-  summary(mod_exp10_reads_no0_fac_add)
-  summary(mod_exp10_reads_no0_fac_int)
-} else {
-  summary(mod_exp10_reads_no0)
-  summary(mod_exp10_reads_no0_fac_add)
-}
+::: {.panel-tabset}
+
+##### mod_23
+
+```{r exp10-reads-no0-summary-base, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_23)
 ```
+
+##### mod_24
+
+```{r exp10-reads-no0-summary-mo-int, echo=FALSE}
+#| class-output: model-output-panel
+if (exp10_reads_has_quantity) summary(mod_24)
+```
+
+##### mod_25
+
+```{r exp10-reads-no0-summary-fac-add, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_25)
+```
+
+##### mod_26
+
+```{r exp10-reads-no0-summary-fac-int, echo=FALSE}
+#| class-output: model-output-panel
+if (exp10_reads_has_quantity) summary(mod_26)
+```
+
+:::
 
 :::
 
@@ -2732,16 +3615,13 @@ brief_dataframe(df)
 ::: {.panel-tabset}
 
 ```{r qpcr-models-fit-submethod, include=FALSE}
-priors <- prior(normal(0, 1.5), class = b)
-
 mod_formula <- bf(pa ~ sub_method + s(increase_in_pvh_number, id = "sub_method") + (1|replicate))
 
-mod_3 <- brm(
+mod_27 <- brm(
   mod_formula,
   family = bernoulli(link = "logit"),
-  prior = priors,
   data = df,
-  file = paste0(here::here("outputs/models/mod.9.Rmd")),
+  file = here::here("outputs/models", "mod_27"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   backend = "cmdstanr", silent = 0, refresh = 100,
   chains = 4, cores = 4, warmup = 1000, iter = 2000
@@ -2750,12 +3630,11 @@ mod_3 <- brm(
 # sub_method × PVH: linear (separate slopes per sub-method)
 mod_formula <- bf(pa ~ sub_method * increase_in_pvh_number + (1|replicate))
 
-mod_4 <- brm(
+mod_28 <- brm(
   mod_formula,
   family = bernoulli(link = "logit"),
-  prior = priors,
   data = df,
-  file = paste0(here::here("outputs/models/mod.10.Rmd")),
+  file = here::here("outputs/models", "mod_28"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   backend = "cmdstanr", silent = 0, refresh = 100,
   chains = 4, cores = 4, warmup = 1000, iter = 2000
@@ -2764,12 +3643,11 @@ mod_4 <- brm(
 # sub_method × PVH: one shared smooth; sub-method shifts intercept only
 mod_formula <- bf(pa ~ sub_method + s(increase_in_pvh_number) + (1|replicate))
 
-mod_5 <- brm(
+mod_29 <- brm(
   mod_formula,
   family = bernoulli(link = "logit"),
-  prior = priors,
   data = df,
-  file = paste0(here::here("outputs/models/mod.11.Rmd")),
+  file = here::here("outputs/models", "mod_29"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   backend = "cmdstanr", silent = 0, refresh = 100,
   chains = 4, cores = 4, warmup = 1000, iter = 2000
@@ -2778,28 +3656,26 @@ mod_5 <- brm(
 # sub_method × PVH: separate smooths per sub-method (mgcv-style by)
 mod_formula <- bf(pa ~ sub_method + s(increase_in_pvh_number, by = sub_method) + (1|replicate))
 
-mod_6 <- brm(
+mod_30 <- brm(
   mod_formula,
   family = bernoulli(link = "logit"),
-  prior = priors,
   data = df,
-  file = paste0(here::here("outputs/models/mod.12.Rmd")),
+  file = here::here("outputs/models", "mod_30"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   backend = "cmdstanr", silent = 0, refresh = 100,
   chains = 4, cores = 4, warmup = 1000, iter = 2000
 )
 
-# + monotonic week within sub_method (parallel to mod_3–mod_6)
+# + monotonic week within sub_method (parallel to mod_27–mod_30)
 mod_formula <- bf(
   pa ~ sub_method + mo(week_ord, id = "sub_method") + s(increase_in_pvh_number, id = "sub_method") + (1|replicate)
 )
 
-mod_7 <- brm(
+mod_31 <- brm(
   mod_formula,
   family = bernoulli(link = "logit"),
-  prior = priors,
   data = df,
-  file = paste0(here::here("outputs/models/mod.14.Rmd")),
+  file = here::here("outputs/models", "mod_31"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   backend = "cmdstanr", silent = 0, refresh = 100,
   chains = 4, cores = 4, warmup = 1000, iter = 2000
@@ -2809,12 +3685,11 @@ mod_formula <- bf(
   pa ~ sub_method * increase_in_pvh_number + mo(week_ord, id = "sub_method") + (1|replicate)
 )
 
-mod_8 <- brm(
+mod_32 <- brm(
   mod_formula,
   family = bernoulli(link = "logit"),
-  prior = priors,
   data = df,
-  file = paste0(here::here("outputs/models/mod.15.Rmd")),
+  file = here::here("outputs/models", "mod_32"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   backend = "cmdstanr", silent = 0, refresh = 100,
   chains = 4, cores = 4, warmup = 1000, iter = 2000
@@ -2824,12 +3699,11 @@ mod_formula <- bf(
   pa ~ sub_method + mo(week_ord, id = "sub_method") + s(increase_in_pvh_number) + (1|replicate)
 )
 
-mod_9 <- brm(
+mod_33 <- brm(
   mod_formula,
   family = bernoulli(link = "logit"),
-  prior = priors,
   data = df,
-  file = paste0(here::here("outputs/models/mod.16.Rmd")),
+  file = here::here("outputs/models", "mod_33"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   backend = "cmdstanr", silent = 0, refresh = 100,
   chains = 4, cores = 4, warmup = 1000, iter = 2000
@@ -2839,12 +3713,11 @@ mod_formula <- bf(
   pa ~ sub_method + mo(week_ord, id = "sub_method") + s(increase_in_pvh_number, by = sub_method) + (1|replicate)
 )
 
-mod_10 <- brm(
+mod_34 <- brm(
   mod_formula,
   family = bernoulli(link = "logit"),
-  prior = priors,
   data = df,
-  file = paste0(here::here("outputs/models/mod.17.Rmd")),
+  file = here::here("outputs/models", "mod_34"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   backend = "cmdstanr", silent = 0, refresh = 100,
   chains = 4, cores = 4, warmup = 1000, iter = 2000
@@ -2855,12 +3728,29 @@ mod_formula <- bf(
   pa ~ sub_method * mo(week_ord, id = "sub_method") + s(increase_in_pvh_number, by = sub_method) + (1|replicate)
 )
 
-mod_11 <- brm(
+mod_35 <- brm(
   mod_formula,
   family = bernoulli(link = "logit"),
-  prior = priors,
   data = df,
-  file = paste0(here::here("outputs/models/mod.18.Rmd")),
+  file = here::here("outputs/models", "mod_35"),
+  threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
+  backend = "cmdstanr", silent = 0, refresh = 100,
+  chains = 4, cores = 4, warmup = 1000, iter = 2000
+)
+
+# sub_method × monotonic PVH × monotonic week (global `mo` for week and PVH index)
+df_mod36 <- df |>
+  dplyr::mutate(increase_in_pvh_number = ordered(increase_in_pvh_number))
+
+mod_formula <- bf(
+  pa ~ sub_method * mo(increase_in_pvh_number) * mo(week_ord) + (1|replicate)
+)
+
+mod_36 <- brm(
+  mod_formula,
+  family = bernoulli(link = "logit"),
+  data = df_mod36,
+  file = here::here("outputs/models", "mod_36"),
   threads = threading(threads = NULL, grainsize = 1250, static = FALSE),
   backend = "cmdstanr", silent = 0, refresh = 100,
   chains = 4, cores = 4, warmup = 1000, iter = 2000
@@ -2979,7 +3869,7 @@ qpcr_plot_pvh_by_submethod <- function(fit) {
 # Week × sub_method: posterior mean response at each (week_ord, sub_method), holding
 # increase_in_pvh_number at its within–sub-method median and replicate at a reference level.
 # Uses posterior_epred() so it behaves for all PVH structures (linear, shared spline, `by`)
-# — conditional_effects("week_ord:sub_method") is unreliable for e.g. mod_10 / mod_11.
+# — conditional_effects("week_ord:sub_method") is unreliable for e.g. mod_34 / mod_35 / mod_36.
 qpcr_plot_week_by_submethod <- function(fit) {
   d <- fit$data
 
@@ -3012,16 +3902,44 @@ qpcr_plot_week_by_submethod <- function(fit) {
   if (length(wk_lvls) < 1L || length(sm_lvls) < 1L) {
     stop("fit$data is missing week_ord or sub_method factor levels.")
   }
-  med_pvh <- tapply(d$increase_in_pvh_number, sm, stats::median, na.rm = TRUE)
-  med_pvh <- med_pvh[sm_lvls]
-  if (any(is.na(med_pvh))) {
+
+  pvh <- d$increase_in_pvh_number
+  sm_chr <- as.character(sm)
+  if (is.numeric(pvh)) {
+    pvh_med_src <- as.numeric(pvh)
+  } else {
+    pvh_med_src <- suppressWarnings(as.numeric(as.character(pvh)))
+    if (anyNA(pvh_med_src)) {
+      pvh_med_src <- as.numeric(pvh)
+    }
+  }
+  med_pvh_num <- tapply(pvh_med_src, sm_chr, stats::median, na.rm = TRUE)
+  med_pvh_num <- med_pvh_num[sm_lvls]
+  if (any(is.na(med_pvh_num))) {
     stop("Could not compute median PVH for every sub_method level.")
   }
+
   rows <- tidyr::expand_grid(
     week_ord = factor(wk_lvls, levels = wk_lvls, ordered = wk_ordered),
     sub_method = factor(sm_lvls, levels = sm_lvls)
   )
-  rows$increase_in_pvh_number <- as.numeric(med_pvh[as.character(rows$sub_method)])
+  if (is.numeric(pvh)) {
+    rows$increase_in_pvh_number <- as.numeric(med_pvh_num[as.character(rows$sub_method)])
+  } else {
+    pvh_lv <- levels(pvh)
+    pvh_lv_num <- suppressWarnings(as.numeric(pvh_lv))
+    if (anyNA(pvh_lv_num)) {
+      pvh_lv_num <- seq_along(pvh_lv)
+    }
+    snap_level <- function(m) {
+      pvh_lv[which.min(abs(pvh_lv_num - m))]
+    }
+    rows$increase_in_pvh_number <- factor(
+      vapply(as.character(rows$sub_method), function(s) snap_level(med_pvh_num[[s]]), character(1)),
+      levels = pvh_lv,
+      ordered = is.ordered(pvh)
+    )
+  }
   rows$replicate <- factor(rep_ref, levels = rep_lvls)
 
   nd <- tryCatch(
@@ -3128,15 +4046,16 @@ waic_tbl_one <- function(m, model_name) {
 }
 
 waic_tbl_pre <- dplyr::bind_rows(
-  waic_tbl_one(mod_3, "mod_3"),
-  waic_tbl_one(mod_4, "mod_4"),
-  waic_tbl_one(mod_5, "mod_5"),
-  waic_tbl_one(mod_6, "mod_6"),
-  waic_tbl_one(mod_7, "mod_7"),
-  waic_tbl_one(mod_8, "mod_8"),
-  waic_tbl_one(mod_9, "mod_9"),
-  waic_tbl_one(mod_10, "mod_10"),
-  waic_tbl_one(mod_11, "mod_11")
+  waic_tbl_one(mod_27, "mod_27"),
+  waic_tbl_one(mod_28, "mod_28"),
+  waic_tbl_one(mod_29, "mod_29"),
+  waic_tbl_one(mod_30, "mod_30"),
+  waic_tbl_one(mod_31, "mod_31"),
+  waic_tbl_one(mod_32, "mod_32"),
+  waic_tbl_one(mod_33, "mod_33"),
+  waic_tbl_one(mod_34, "mod_34"),
+  waic_tbl_one(mod_35, "mod_35"),
+  waic_tbl_one(mod_36, "mod_36")
 ) %>%
   dplyr::mutate(model_id = as.integer(sub("^mod_", "", Model))) %>%
   dplyr::arrange(WAIC, model_id)
@@ -3151,89 +4070,126 @@ waic_tbl <- waic_tbl_pre %>%
   dplyr::select(Model, WAIC, SE, delta_WAIC)
 
 qpcr_model_formula_lines <- c(
-  "3" = "bf(pa ~ sub_method + s(increase_in_pvh_number, id = \"sub_method\") + (1|replicate))",
-  "4" = "bf(pa ~ sub_method * increase_in_pvh_number + (1|replicate))",
-  "5" = "bf(pa ~ sub_method + s(increase_in_pvh_number) + (1|replicate))",
-  "6" = "bf(pa ~ sub_method + s(increase_in_pvh_number, by = sub_method) + (1|replicate))",
-  "7" = "bf(pa ~ sub_method + mo(week_ord, id = \"sub_method\") + s(increase_in_pvh_number, id = \"sub_method\") + (1|replicate))",
-  "8" = "bf(pa ~ sub_method * increase_in_pvh_number + mo(week_ord, id = \"sub_method\") + (1|replicate))",
-  "9" = "bf(pa ~ sub_method + mo(week_ord, id = \"sub_method\") + s(increase_in_pvh_number) + (1|replicate))",
-  "10" = "bf(pa ~ sub_method + mo(week_ord, id = \"sub_method\") + s(increase_in_pvh_number, by = sub_method) + (1|replicate))",
-  "11" = "bf(pa ~ sub_method * mo(week_ord, id = \"sub_method\") + s(increase_in_pvh_number, by = sub_method) + (1|replicate))"
+  "27" = "bf(pa ~ sub_method + s(increase_in_pvh_number, id = \"sub_method\") + (1|replicate))",
+  "28" = "bf(pa ~ sub_method * increase_in_pvh_number + (1|replicate))",
+  "29" = "bf(pa ~ sub_method + s(increase_in_pvh_number) + (1|replicate))",
+  "30" = "bf(pa ~ sub_method + s(increase_in_pvh_number, by = sub_method) + (1|replicate))",
+  "31" = "bf(pa ~ sub_method + mo(week_ord, id = \"sub_method\") + s(increase_in_pvh_number, id = \"sub_method\") + (1|replicate))",
+  "32" = "bf(pa ~ sub_method * increase_in_pvh_number + mo(week_ord, id = \"sub_method\") + (1|replicate))",
+  "33" = "bf(pa ~ sub_method + mo(week_ord, id = \"sub_method\") + s(increase_in_pvh_number) + (1|replicate))",
+  "34" = "bf(pa ~ sub_method + mo(week_ord, id = \"sub_method\") + s(increase_in_pvh_number, by = sub_method) + (1|replicate))",
+  "35" = "bf(pa ~ sub_method * mo(week_ord, id = \"sub_method\") + s(increase_in_pvh_number, by = sub_method) + (1|replicate))",
+  "36" = "bf(pa ~ sub_method * mo(increase_in_pvh_number) * mo(week_ord) + (1|replicate))"
 )
 ```
 
 ## Effect plots
 
-Side-by-side tabs for **`mod_8`** and **`mod_10`**. Each tab shows **week × sub-method** (`posterior_epred` on a full week × sub-method grid: median PVH per sub-method, reference replicate, `re_formula = NA`) and **PVH number × sub-method** (`conditional_effects`; other predictors at **brms** defaults). Figures are written to `outputs/plots/` as `qpcr_effect_mod8_*` and `qpcr_effect_mod10_*`.
+**Figure 8** (week × sub-method) and **Figure 9** (PVH number × sub-method) for the qPCR experiment; each tab repeats the same pair of figures for a different fitted model (`mod_32`, `mod_34`, `mod_36`).
 
 ::: {.panel-tabset}
 
-## Effect plots (mod 8)
+## Effect plots (mod_32)
 
-```{r qpcr-effect-mod8, echo=FALSE, results="asis", fig.width=9, fig.height=6, out.width="100%", dpi=600}
+```{r qpcr-effect-mod32, echo=FALSE, results="asis", fig.width=9, fig.height=6, out.width="100%", dpi=600}
 #| fig-keep: all
-fit <- mod_8
+fit <- mod_32
 gw <- knitr::opts_current$get("fig.width")
 gh <- knitr::opts_current$get("fig.height")
-cat("```r\n", qpcr_model_formula_lines[["8"]], "\n```\n\n", sep = "")
-cat("**Week × sub-method**\n\n")
+cat("```r\n", qpcr_model_formula_lines[["32"]], "\n```\n\n", sep = "")
+cat("**Figure 8 — week × sub-method**\n\n")
 pw <- qpcr_plot_week_by_submethod(fit)
 ggplot2::ggsave(
-  filename = here::here("outputs/plots", "qpcr_effect_mod8_week.png"),
+  filename = here::here("outputs/plots", "figure-08-qpcr-week-mod_32.png"),
   plot = pw,
   width = gw,
   height = gh,
   dpi = 600
 )
 print(pw)
-cat("\n**PVH number × sub-method**\n\n")
+cat("\n\nFigure 8: qPCR experiment — predicted outcome by experimental week and qPCR sub-method.\n\n")
+cat("**Figure 9 — PVH number × sub-method**\n\n")
 pp <- qpcr_plot_pvh_by_submethod(fit)
 ggplot2::ggsave(
-  filename = here::here("outputs/plots", "qpcr_effect_mod8_pvh.png"),
+  filename = here::here("outputs/plots", "figure-09-qpcr-pvh-mod_32.png"),
   plot = pp,
   width = gw,
   height = gh,
   dpi = 600
 )
 print(pp)
+cat("\n\nFigure 9: qPCR experiment — predicted outcome by PVH number and qPCR sub-method.\n\n")
 ```
 
-## Effect plots (mod 10)
+## Effect plots (mod_34)
 
-```{r qpcr-effect-mod10, echo=FALSE, results="asis", fig.width=9, fig.height=6, out.width="100%", dpi=600}
+```{r qpcr-effect-mod34, echo=FALSE, results="asis", fig.width=9, fig.height=6, out.width="100%", dpi=600}
 #| fig-keep: all
-fit <- mod_10
+fit <- mod_34
 gw <- knitr::opts_current$get("fig.width")
 gh <- knitr::opts_current$get("fig.height")
-cat("```r\n", qpcr_model_formula_lines[["10"]], "\n```\n\n", sep = "")
-cat("**Week × sub-method**\n\n")
+cat("```r\n", qpcr_model_formula_lines[["34"]], "\n```\n\n", sep = "")
+cat("**Figure 8 — week × sub-method**\n\n")
 pw <- qpcr_plot_week_by_submethod(fit)
 ggplot2::ggsave(
-  filename = here::here("outputs/plots", "qpcr_effect_mod10_week.png"),
+  filename = here::here("outputs/plots", "figure-08-qpcr-week-mod_34.png"),
   plot = pw,
   width = gw,
   height = gh,
   dpi = 600
 )
 print(pw)
-cat("\n**PVH number × sub-method**\n\n")
+cat("\n\nFigure 8: qPCR experiment — predicted outcome by experimental week and qPCR sub-method.\n\n")
+cat("**Figure 9 — PVH number × sub-method**\n\n")
 pp <- qpcr_plot_pvh_by_submethod(fit)
 ggplot2::ggsave(
-  filename = here::here("outputs/plots", "qpcr_effect_mod10_pvh.png"),
+  filename = here::here("outputs/plots", "figure-09-qpcr-pvh-mod_34.png"),
   plot = pp,
   width = gw,
   height = gh,
   dpi = 600
 )
 print(pp)
+cat("\n\nFigure 9: qPCR experiment — predicted outcome by PVH number and qPCR sub-method.\n\n")
+```
+
+## Effect plots (mod_36)
+
+```{r qpcr-effect-mod36, echo=FALSE, results="asis", fig.width=9, fig.height=6, out.width="100%", dpi=600}
+#| fig-keep: all
+fit <- mod_36
+gw <- knitr::opts_current$get("fig.width")
+gh <- knitr::opts_current$get("fig.height")
+cat("```r\n", qpcr_model_formula_lines[["36"]], "\n```\n\n", sep = "")
+cat("**Figure 8 — week × sub-method**\n\n")
+pw <- qpcr_plot_week_by_submethod(fit)
+ggplot2::ggsave(
+  filename = here::here("outputs/plots", "figure-08-qpcr-week-mod_36.png"),
+  plot = pw,
+  width = gw,
+  height = gh,
+  dpi = 600
+)
+print(pw)
+cat("\n\nFigure 8: qPCR experiment — predicted outcome by experimental week and qPCR sub-method.\n\n")
+cat("**Figure 9 — PVH number × sub-method**\n\n")
+pp <- qpcr_plot_pvh_by_submethod(fit)
+ggplot2::ggsave(
+  filename = here::here("outputs/plots", "figure-09-qpcr-pvh-mod_36.png"),
+  plot = pp,
+  width = gw,
+  height = gh,
+  dpi = 600
+)
+print(pp)
+cat("\n\nFigure 9: qPCR experiment — predicted outcome by PVH number and qPCR sub-method.\n\n")
 ```
 
 :::
 
 ## Models
 
-Sub-method formulations (`mod_3`–`mod_11`; includes monotonic week in `mod_7`–`mod_11`):
+Sub-method formulations (`mod_27`–`mod_36`; includes monotonic week in `mod_31`–`mod_36`):
 
 ```{r qpcr-models-show, ref.label="qpcr-models-fit-submethod", echo=TRUE, eval=FALSE}
 
@@ -3256,31 +4212,93 @@ knitr::kable(
 #| message: false
 #| fig-show: hold
 #| layout-ncol: 2
-pp_check(mod_3, ndraws = 200, col = 2)
-pp_check(mod_4, ndraws = 200, col = 2)
-pp_check(mod_5, ndraws = 200, col = 2)
-pp_check(mod_6, ndraws = 200, col = 2)
-pp_check(mod_7, ndraws = 200, col = 2)
-pp_check(mod_8, ndraws = 200, col = 2)
-pp_check(mod_9, ndraws = 200, col = 2)
-pp_check(mod_10, ndraws = 200, col = 2)
-pp_check(mod_11, ndraws = 200, col = 2)
+pp_check(mod_27, ndraws = 200, col = 2)
+pp_check(mod_28, ndraws = 200, col = 2)
+pp_check(mod_29, ndraws = 200, col = 2)
+pp_check(mod_30, ndraws = 200, col = 2)
+pp_check(mod_31, ndraws = 200, col = 2)
+pp_check(mod_32, ndraws = 200, col = 2)
+pp_check(mod_33, ndraws = 200, col = 2)
+pp_check(mod_34, ndraws = 200, col = 2)
+pp_check(mod_35, ndraws = 200, col = 2)
+pp_check(mod_36, ndraws = 200, col = 2)
 ```
 
 ## Output
 
-```{r qpcr-summary, echo=FALSE}
-summary(mod_3)
-summary(mod_4)
-summary(mod_5)
-summary(mod_6)
-summary(mod_7)
-summary(mod_8)
-summary(mod_9)
-summary(mod_10)
-summary(mod_11)
+::: {.panel-tabset}
+
+### mod_27
+
+```{r qpcr-summary-mod3, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_27)
 ```
 
+### mod_28
+
+```{r qpcr-summary-mod4, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_28)
+```
+
+### mod_29
+
+```{r qpcr-summary-mod5, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_29)
+```
+
+### mod_30
+
+```{r qpcr-summary-mod6, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_30)
+```
+
+### mod_31
+
+```{r qpcr-summary-mod7, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_31)
+```
+
+### mod_32
+
+```{r qpcr-summary-mod32, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_32)
+```
+
+### mod_33
+
+```{r qpcr-summary-mod9, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_33)
+```
+
+### mod_34
+
+```{r qpcr-summary-mod34, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_34)
+```
+
+### mod_35
+
+```{r qpcr-summary-mod11, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_35)
+```
+
+### mod_36
+
+```{r qpcr-summary-mod36, echo=FALSE}
+#| class-output: model-output-panel
+summary(mod_36)
+```
+
+:::
 
 :::
 
